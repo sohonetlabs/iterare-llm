@@ -1,0 +1,33 @@
+[project]
+name = "iterare-llm"
+dynamic = ["version"]
+description = "Automated Claude Code execution in isolated environments"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "typer>=0.19.2",
+    "pyyaml>=6.0.1",
+    "docker>=7.0.0",
+    "platformdirs>=4.0.0",
+]
+
+[project.scripts]
+iterare = "iterare_llm.main:main"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.4",
+]
+test = [
+    "pytest>=8.4.2",
+    "pytest-cov>=7.0.0",
+    "coverage>=7.6.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "VERSION"
+pattern = "(?P<version>.+)"

@@ -1,0 +1,4 @@
+---
+---
+
+Content after empty frontmatter.

@@ -1,0 +1,8 @@
+[docker]
+image = ""
+
+[claude]
+credentials_path = "/some/path"
+
+[firewall]
+allowed_domains = ["pypi.org"]
