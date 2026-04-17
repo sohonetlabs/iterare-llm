@@ -299,10 +299,10 @@ make format     # Auto-format code
 
 ### Docker image not found
 
-Build the images first:
+The default image (`sohonet/iterare-llm:latest`) is pulled automatically from Docker Hub.
+To build locally instead:
 
 ```bash
-make build-base
 make build
 ```
 

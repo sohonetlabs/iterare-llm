@@ -1,17 +1,22 @@
-.PHONY: build-base build sync lock lint lint-fix format test coverage
-
-BASE_TAG ?= latest
-BASE_IMAGE_NAME = iterare-base
+.PHONY: build build-multiarch push sync lock lint lint-fix format test coverage
 
 IMAGE_NAME = iterare-llm
+REGISTRY = sohonet/iterare-llm
 TAG ?= latest
+PLATFORMS ?= linux/amd64,linux/arm64
 
 # Docker commands
-build-base:
-	docker build -t $(BASE_IMAGE_NAME):$(BASE_TAG) -f claude-code/.devcontainer/Dockerfile claude-code/.devcontainer/
-
 build:
 	docker build -t $(IMAGE_NAME):$(TAG) .
+
+build-multiarch:
+	docker buildx build --platform $(PLATFORMS) -t $(IMAGE_NAME):$(TAG) .
+
+push:
+	docker buildx build --platform $(PLATFORMS) \
+		--tag $(REGISTRY):$(TAG) \
+		--tag $(REGISTRY):latest \
+		--push .
 
 # Development commands
 sync:
