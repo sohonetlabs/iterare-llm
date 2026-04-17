@@ -1,5 +1,5 @@
 import typer
-from typing_extensions import Annotated
+from typing import Annotated
 
 from iterare_llm.commands.credentials import credentials as credentials_command
 from iterare_llm.commands.init import init
