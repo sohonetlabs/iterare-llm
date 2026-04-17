@@ -32,7 +32,7 @@ def project_dir(tmp_path):
 
     config_toml = iterare_dir / "config.toml"
     config_toml.write_text(
-        '[docker]\n'
+        "[docker]\n"
         'image = "iterare-llm:latest"\n'
         "\n"
         "[session]\n"
@@ -174,11 +174,13 @@ class FakeGit:
         elif "worktree" in cmd and "list" in cmd:
             blocks = []
             for p in self.worktree_paths:
-                blocks.append(dedent(f"""\
+                blocks.append(
+                    dedent(f"""\
                     worktree {p}
                     HEAD abc123
                     branch refs/heads/main
-                """).strip())
+                """).strip()
+                )
             result.stdout = "\n".join(blocks)
         elif "branch" in cmd and "--show-current" in cmd:
             result.stdout = f"{self.current_branch}\n"

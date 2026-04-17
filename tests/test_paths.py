@@ -14,7 +14,6 @@ from iterare_llm.paths import (
 
 
 class TestAppDirectories:
-
     @patch("iterare_llm.paths.user_config_dir", return_value="/mock/config/iterare")
     def test_config_dir(self, _):
         result = get_app_config_dir()
@@ -35,7 +34,6 @@ class TestAppDirectories:
 
 
 class TestDerivedDirectories:
-
     @patch("iterare_llm.paths.user_data_dir", return_value="/mock/data/iterare")
     def test_logs_dir(self, _):
         result = get_logs_dir()
@@ -50,7 +48,6 @@ class TestDerivedDirectories:
 
 
 class TestLogFilePath:
-
     @patch("iterare_llm.paths.user_data_dir", return_value="/mock/data/iterare")
     def test_format(self, _):
         result = get_log_file_path("refactor-api-abc123")

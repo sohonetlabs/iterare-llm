@@ -24,7 +24,6 @@ def test_generate_claude_config():
 
 
 class TestWriteClaudeConfig:
-
     def test_writes_json(self, tmp_path):
         config = {"key": "value"}
 
@@ -39,7 +38,6 @@ class TestWriteClaudeConfig:
 
 
 class TestWritePromptFile:
-
     def test_writes_content(self, tmp_path):
         write_prompt_file(tmp_path, "Do the thing.")
 
@@ -51,7 +49,6 @@ class TestWritePromptFile:
 
 
 class TestPrepareWorkspace:
-
     def test_creates_both_files(self, tmp_path):
         prepare_workspace(tmp_path, "My prompt content")
 

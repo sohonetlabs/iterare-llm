@@ -45,7 +45,6 @@ def test_get_default_credentials_path(mock_user_config_dir):
 
 
 class TestExpandPath:
-
     def test_expands_tilde(self):
         result = expand_path("~/some/path")
 
@@ -66,7 +65,6 @@ class TestExpandPath:
 
 
 class TestParseTomlConfig:
-
     def test_valid_toml(self):
         result = parse_toml_config(TEST_FILES / "valid_config.toml")
 
@@ -92,7 +90,6 @@ class TestParseTomlConfig:
 
 
 class TestBuildConfigFromDict:
-
     def test_full_dict(self):
         data = {
             "docker": {"image": "custom:v1"},
@@ -118,7 +115,6 @@ class TestBuildConfigFromDict:
 
 
 class TestValidateDockerConfig:
-
     def test_valid_image(self):
         config = DockerConfig(image="iterare-llm:latest")
 
@@ -135,7 +131,6 @@ class TestValidateDockerConfig:
 
 
 class TestValidateClaudeConfig:
-
     def test_valid_path(self):
         config = ClaudeConfig(credentials_path="/home/user/.config/iterare")
 
@@ -152,7 +147,6 @@ class TestValidateClaudeConfig:
 
 
 class TestValidateFirewallConfig:
-
     def test_valid_domains(self):
         config = FirewallConfig(allowed_domains=["pypi.org", "example.com"])
 
@@ -190,7 +184,6 @@ class TestValidateFirewallConfig:
 
 
 class TestValidateConfig:
-
     def test_valid_config(self):
         config = Config(
             docker=DockerConfig(image="iterare-llm:latest"),
@@ -227,7 +220,6 @@ def test_get_claude_credentials_path(sample_config):
 
 
 class TestCredentialsExist:
-
     def test_existing_directory(self, tmp_path):
         result = credentials_exist(tmp_path)
 
@@ -248,7 +240,6 @@ class TestCredentialsExist:
 
 
 class TestValidateCredentials:
-
     def test_valid_credentials(self, sample_config):
         with does_not_raise():
             validate_credentials(sample_config)
@@ -266,7 +257,6 @@ class TestValidateCredentials:
 
 
 class TestLoadConfig:
-
     def test_valid_project(self, project_dir):
         result = load_config(project_dir)
 
@@ -280,7 +270,9 @@ class TestLoadConfig:
     def test_invalid_values_raises_config_error(self, tmp_path):
         iterare_dir = tmp_path / ".iterare"
         iterare_dir.mkdir()
-        shutil.copy(TEST_FILES / "invalid_values_config.toml", iterare_dir / "config.toml")
+        shutil.copy(
+            TEST_FILES / "invalid_values_config.toml", iterare_dir / "config.toml"
+        )
 
         with pytest.raises(ConfigError, match="Configuration validation failed"):
             load_config(tmp_path)

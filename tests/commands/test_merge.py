@@ -12,13 +12,17 @@ runner = CliRunner()
 
 
 class TestMergeCommand:
-
     @pytest.fixture(autouse=True)
     def setup_patches(self):
         self.patches = [
-            patch("iterare_llm.commands.merge.resolve_project_dir", return_value=Path("/project")),
+            patch(
+                "iterare_llm.commands.merge.resolve_project_dir",
+                return_value=Path("/project"),
+            ),
             patch("iterare_llm.commands.merge.is_git_repository", return_value=True),
-            patch("iterare_llm.commands.merge.get_current_run", return_value="run-abc123"),
+            patch(
+                "iterare_llm.commands.merge.get_current_run", return_value="run-abc123"
+            ),
             patch("iterare_llm.commands.merge.branch_exists", return_value=True),
             patch("iterare_llm.commands.merge.get_current_branch", return_value="main"),
             patch("iterare_llm.commands.merge.merge_branch"),

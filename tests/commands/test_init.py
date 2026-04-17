@@ -13,7 +13,6 @@ runner = CliRunner()
 
 
 class TestInitProject:
-
     def test_creates_structure(self, tmp_path):
         init_project(tmp_path)
 
@@ -37,7 +36,9 @@ class TestInitProject:
 
         assert (tmp_path / ".iterare" / "config.toml").is_file()
 
-    @patch("iterare_llm.commands.init.Path.mkdir", side_effect=PermissionError("denied"))
+    @patch(
+        "iterare_llm.commands.init.Path.mkdir", side_effect=PermissionError("denied")
+    )
     def test_permission_error(self, _, tmp_path):
         with pytest.raises(PermissionError, match="Permission denied"):
             init_project(tmp_path)
@@ -49,7 +50,6 @@ class TestInitProject:
 
 
 class TestUpdateGitignore:
-
     def test_creates_if_missing(self, tmp_path):
         _update_gitignore(tmp_path)
 
@@ -75,7 +75,6 @@ class TestUpdateGitignore:
 
 
 class TestInitCommand:
-
     def test_success(self, tmp_path):
         result = runner.invoke(app, ["init", str(tmp_path)])
 
@@ -96,7 +95,9 @@ class TestInitCommand:
 
         assert result.exit_code == 0
 
-    @patch("iterare_llm.commands.init.init_project", side_effect=PermissionError("nope"))
+    @patch(
+        "iterare_llm.commands.init.init_project", side_effect=PermissionError("nope")
+    )
     def test_permission_error(self, _, tmp_path):
         result = runner.invoke(app, ["init", str(tmp_path)])
 
@@ -110,7 +111,9 @@ class TestInitCommand:
         assert result.exit_code == 1
         assert "Error initializing project" in result.output
 
-    @patch("iterare_llm.commands.init.init_project", side_effect=RuntimeError("unexpected"))
+    @patch(
+        "iterare_llm.commands.init.init_project", side_effect=RuntimeError("unexpected")
+    )
     def test_unexpected_error(self, _, tmp_path):
         result = runner.invoke(app, ["init", str(tmp_path)])
 

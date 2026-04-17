@@ -11,7 +11,6 @@ runner = CliRunner()
 
 
 class TestCallback:
-
     def test_version_flag(self):
         result = runner.invoke(app, ["--version"])
 

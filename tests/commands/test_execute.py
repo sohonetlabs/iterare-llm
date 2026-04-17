@@ -6,7 +6,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from iterare_llm.commands.execute import display_success_message, prompt_name_autocomplete
+from iterare_llm.commands.execute import (
+    display_success_message,
+    prompt_name_autocomplete,
+)
 from iterare_llm.exceptions import (
     ContainerAlreadyRunningError,
     CredentialsNotFoundError,
@@ -19,7 +22,9 @@ runner = CliRunner()
 
 
 def test_display_success_message(capsys):
-    display_success_message("run-abc123", "containerid", Path("/project/workspaces/run-abc123"), "main")
+    display_success_message(
+        "run-abc123", "containerid", Path("/project/workspaces/run-abc123"), "main"
+    )
 
     captured = capsys.readouterr()
     assert "run-abc123" in captured.out
@@ -27,7 +32,6 @@ def test_display_success_message(capsys):
 
 
 class TestPromptNameAutocomplete:
-
     @patch("iterare_llm.commands.execute.list_prompts")
     def test_filters_by_prefix(self, mock_list_prompts):
         mock_list_prompts.return_value = [
@@ -48,7 +52,6 @@ class TestPromptNameAutocomplete:
 
 
 class TestExecuteCommand:
-
     @pytest.fixture(autouse=True)
     def setup_patches(self, tmp_path):
         self.project_dir = tmp_path
@@ -63,24 +66,56 @@ class TestExecuteCommand:
         prompt_path.write_text("Do the thing.")
 
         self.patches = [
-            patch("iterare_llm.commands.execute.resolve_project_dir", return_value=tmp_path),
+            patch(
+                "iterare_llm.commands.execute.resolve_project_dir",
+                return_value=tmp_path,
+            ),
             patch("iterare_llm.commands.execute.is_git_repository", return_value=True),
             patch("iterare_llm.commands.execute.load_config"),
             patch("iterare_llm.commands.execute.validate_credentials"),
-            patch("iterare_llm.commands.execute.resolve_prompt_path", return_value=prompt_path),
+            patch(
+                "iterare_llm.commands.execute.resolve_prompt_path",
+                return_value=prompt_path,
+            ),
             patch("iterare_llm.commands.execute.parse_prompt_file"),
-            patch("iterare_llm.commands.execute.get_workspace_name_from_prompt", return_value="task"),
-            patch("iterare_llm.commands.execute.generate_run_name", return_value="task-abc123"),
-            patch("iterare_llm.commands.execute.get_current_branch", return_value="main"),
-            patch("iterare_llm.commands.execute.get_docker_client", return_value=MagicMock()),
+            patch(
+                "iterare_llm.commands.execute.get_workspace_name_from_prompt",
+                return_value="task",
+            ),
+            patch(
+                "iterare_llm.commands.execute.generate_run_name",
+                return_value="task-abc123",
+            ),
+            patch(
+                "iterare_llm.commands.execute.get_current_branch", return_value="main"
+            ),
+            patch(
+                "iterare_llm.commands.execute.get_docker_client",
+                return_value=MagicMock(),
+            ),
             patch("iterare_llm.commands.execute.validate_launch_requirements"),
-            patch("iterare_llm.commands.execute.create_worktree", return_value=worktree_path),
+            patch(
+                "iterare_llm.commands.execute.create_worktree",
+                return_value=worktree_path,
+            ),
             patch("iterare_llm.commands.execute.worktree_exists", return_value=True),
-            patch("iterare_llm.commands.execute.get_worktree_path", return_value=worktree_path),
+            patch(
+                "iterare_llm.commands.execute.get_worktree_path",
+                return_value=worktree_path,
+            ),
             patch("iterare_llm.commands.execute.prepare_workspace"),
-            patch("iterare_llm.commands.execute.resolve_environment_variables", return_value={}),
-            patch("iterare_llm.commands.execute.get_claude_credentials_path", return_value=creds_path),
-            patch("iterare_llm.commands.execute.launch_container", return_value="containerid123"),
+            patch(
+                "iterare_llm.commands.execute.resolve_environment_variables",
+                return_value={},
+            ),
+            patch(
+                "iterare_llm.commands.execute.get_claude_credentials_path",
+                return_value=creds_path,
+            ),
+            patch(
+                "iterare_llm.commands.execute.launch_container",
+                return_value="containerid123",
+            ),
             patch("iterare_llm.commands.execute.register_run"),
         ]
         self.mocks = {}
@@ -106,14 +141,18 @@ class TestExecuteCommand:
         assert "Not a git repository" in result.output
 
     def test_image_not_found(self):
-        self.mocks["validate_launch_requirements"].side_effect = ImageNotFoundError("missing")
+        self.mocks["validate_launch_requirements"].side_effect = ImageNotFoundError(
+            "missing"
+        )
 
         result = runner.invoke(app, ["execute", "task"])
 
         assert result.exit_code == 1
 
     def test_container_already_running(self):
-        self.mocks["validate_launch_requirements"].side_effect = ContainerAlreadyRunningError("busy")
+        self.mocks[
+            "validate_launch_requirements"
+        ].side_effect = ContainerAlreadyRunningError("busy")
 
         result = runner.invoke(app, ["execute", "task"])
 
@@ -121,7 +160,9 @@ class TestExecuteCommand:
         assert "docker stop" in result.output
 
     def test_credentials_not_found(self):
-        self.mocks["validate_credentials"].side_effect = CredentialsNotFoundError("missing")
+        self.mocks["validate_credentials"].side_effect = CredentialsNotFoundError(
+            "missing"
+        )
 
         result = runner.invoke(app, ["execute", "task"])
 

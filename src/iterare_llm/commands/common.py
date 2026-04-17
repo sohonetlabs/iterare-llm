@@ -10,8 +10,8 @@ import typer
 from iterare_llm.config import Config
 from iterare_llm.docker import (
     container_running,
+    ensure_image,
     generate_container_name,
-    image_exists,
 )
 from iterare_llm.exceptions import (
     ContainerAlreadyRunningError,
@@ -212,11 +212,7 @@ def validate_launch_requirements(
     """
     logger.debug("Validating launch requirements")
 
-    if not image_exists(docker_client, config.docker.image):
-        raise ImageNotFoundError(
-            f"Docker image '{config.docker.image}' not found. "
-            "Please build the Docker image first."
-        )
+    ensure_image(docker_client, config.docker.image)
 
     container_name = generate_container_name(workspace_name)
     if container_running(docker_client, container_name):

@@ -12,7 +12,6 @@ runner = CliRunner()
 
 
 class TestCreateAppDirectories:
-
     @patch("iterare_llm.commands.install.get_tmp_dir")
     @patch("iterare_llm.commands.install.get_logs_dir")
     @patch("iterare_llm.commands.install.get_app_config_dir")
@@ -53,7 +52,6 @@ class TestCreateAppDirectories:
 
 
 class TestInstallCommand:
-
     @patch("iterare_llm.commands.install.create_app_directories")
     def test_success(self, mock_create, tmp_path):
         mock_create.return_value = (
@@ -67,19 +65,28 @@ class TestInstallCommand:
         assert result.exit_code == 0
         assert "Installation complete" in result.output
 
-    @patch("iterare_llm.commands.install.create_app_directories", side_effect=PermissionError("denied"))
+    @patch(
+        "iterare_llm.commands.install.create_app_directories",
+        side_effect=PermissionError("denied"),
+    )
     def test_permission_error(self, _):
         result = runner.invoke(app, ["install"])
 
         assert result.exit_code == 1
 
-    @patch("iterare_llm.commands.install.create_app_directories", side_effect=OSError("disk full"))
+    @patch(
+        "iterare_llm.commands.install.create_app_directories",
+        side_effect=OSError("disk full"),
+    )
     def test_os_error(self, _):
         result = runner.invoke(app, ["install"])
 
         assert result.exit_code == 1
 
-    @patch("iterare_llm.commands.install.create_app_directories", side_effect=RuntimeError("unexpected"))
+    @patch(
+        "iterare_llm.commands.install.create_app_directories",
+        side_effect=RuntimeError("unexpected"),
+    )
     def test_unexpected_error(self, _):
         result = runner.invoke(app, ["install"])
 

@@ -7,14 +7,17 @@ import pytest
 from typer.testing import CliRunner
 
 from iterare_llm.commands.interactive import build_docker_run_command
-from iterare_llm.exceptions import ContainerAlreadyRunningError, ImageNotFoundError, IterareError
+from iterare_llm.exceptions import (
+    ContainerAlreadyRunningError,
+    ImageNotFoundError,
+    IterareError,
+)
 from iterare_llm.main import app
 
 runner = CliRunner()
 
 
 class TestBuildDockerRunCommand:
-
     @pytest.fixture(autouse=True)
     def setup_paths(self, tmp_path):
         self.worktree = tmp_path / "worktree"
@@ -30,72 +33,123 @@ class TestBuildDockerRunCommand:
 
     def test_root_user(self):
         result = build_docker_run_command(
-            "iterare-llm:latest", "it-run", self.worktree,
-            self.creds, self.config_file, self.domains_file,
-            self.log_file, "root",
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "root",
         )
 
         assert result == [
-            "docker", "run", "-it", "--rm",
-            "--name", "it-run",
-            "--cap-add", "NET_ADMIN",
-            "-w", "/workspace",
-            "-e", "ITERARE_MODE=interactive",
-            "-v", f"{self.worktree}:/workspace:rw",
-            "-v", f"{self.creds / '.credentials.json'}:/root/.claude/.credentials.json:rw",
-            "-v", f"{self.config_file}:/root/.claude.json:rw",
-            "-v", f"{self.domains_file}:/etc/iterare-domains.txt:ro",
-            "-v", f"{self.log_file}:/var/log/iterare.log:rw",
+            "docker",
+            "run",
+            "-it",
+            "--rm",
+            "--name",
+            "it-run",
+            "--cap-add",
+            "NET_ADMIN",
+            "-w",
+            "/workspace",
+            "-e",
+            "ITERARE_MODE=interactive",
+            "-v",
+            f"{self.worktree}:/workspace:rw",
+            "-v",
+            f"{self.creds / '.credentials.json'}:/root/.claude/.credentials.json:rw",
+            "-v",
+            f"{self.config_file}:/root/.claude.json:rw",
+            "-v",
+            f"{self.domains_file}:/etc/iterare-domains.txt:ro",
+            "-v",
+            f"{self.log_file}:/var/log/iterare.log:rw",
             "iterare-llm:latest",
         ]
 
     def test_non_root_user(self):
         result = build_docker_run_command(
-            "iterare-llm:latest", "it-run", self.worktree,
-            self.creds, self.config_file, self.domains_file,
-            self.log_file, "node",
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
         )
 
         assert result == [
-            "docker", "run", "-it", "--rm",
-            "--name", "it-run",
-            "--cap-add", "NET_ADMIN",
-            "-w", "/workspace",
-            "-e", "ITERARE_MODE=interactive",
-            "-v", f"{self.worktree}:/workspace:rw",
-            "-v", f"{self.creds / '.credentials.json'}:/home/node/.claude/.credentials.json:rw",
-            "-v", f"{self.config_file}:/home/node/.claude.json:rw",
-            "-v", f"{self.domains_file}:/etc/iterare-domains.txt:ro",
-            "-v", f"{self.log_file}:/var/log/iterare.log:rw",
+            "docker",
+            "run",
+            "-it",
+            "--rm",
+            "--name",
+            "it-run",
+            "--cap-add",
+            "NET_ADMIN",
+            "-w",
+            "/workspace",
+            "-e",
+            "ITERARE_MODE=interactive",
+            "-v",
+            f"{self.worktree}:/workspace:rw",
+            "-v",
+            f"{self.creds / '.credentials.json'}:/home/node/.claude/.credentials.json:rw",
+            "-v",
+            f"{self.config_file}:/home/node/.claude.json:rw",
+            "-v",
+            f"{self.domains_file}:/etc/iterare-domains.txt:ro",
+            "-v",
+            f"{self.log_file}:/var/log/iterare.log:rw",
             "iterare-llm:latest",
         ]
 
     def test_with_environment_variables(self):
         result = build_docker_run_command(
-            "iterare-llm:latest", "it-run", self.worktree,
-            self.creds, self.config_file, self.domains_file,
-            self.log_file, "node",
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
             environment={"MY_VAR": "val"},
         )
 
         assert result == [
-            "docker", "run", "-it", "--rm",
-            "--name", "it-run",
-            "--cap-add", "NET_ADMIN",
-            "-w", "/workspace",
-            "-e", "ITERARE_MODE=interactive",
-            "-e", "MY_VAR=val",
-            "-v", f"{self.worktree}:/workspace:rw",
-            "-v", f"{self.creds / '.credentials.json'}:/home/node/.claude/.credentials.json:rw",
-            "-v", f"{self.config_file}:/home/node/.claude.json:rw",
-            "-v", f"{self.domains_file}:/etc/iterare-domains.txt:ro",
-            "-v", f"{self.log_file}:/var/log/iterare.log:rw",
+            "docker",
+            "run",
+            "-it",
+            "--rm",
+            "--name",
+            "it-run",
+            "--cap-add",
+            "NET_ADMIN",
+            "-w",
+            "/workspace",
+            "-e",
+            "ITERARE_MODE=interactive",
+            "-e",
+            "MY_VAR=val",
+            "-v",
+            f"{self.worktree}:/workspace:rw",
+            "-v",
+            f"{self.creds / '.credentials.json'}:/home/node/.claude/.credentials.json:rw",
+            "-v",
+            f"{self.config_file}:/home/node/.claude.json:rw",
+            "-v",
+            f"{self.domains_file}:/etc/iterare-domains.txt:ro",
+            "-v",
+            f"{self.log_file}:/var/log/iterare.log:rw",
             "iterare-llm:latest",
         ]
 
 
 class TestInteractiveCommand:
-
     @pytest.fixture(autouse=True)
     def setup_patches(self, tmp_path):
         self.project_dir = tmp_path
@@ -113,26 +167,71 @@ class TestInteractiveCommand:
         domains_file.touch()
 
         self.patches = [
-            patch("iterare_llm.commands.interactive.resolve_project_dir", return_value=tmp_path),
-            patch("iterare_llm.commands.interactive.is_git_repository", return_value=True),
+            patch(
+                "iterare_llm.commands.interactive.resolve_project_dir",
+                return_value=tmp_path,
+            ),
+            patch(
+                "iterare_llm.commands.interactive.is_git_repository", return_value=True
+            ),
             patch("iterare_llm.commands.interactive.load_config"),
             patch("iterare_llm.commands.interactive.validate_credentials"),
-            patch("iterare_llm.commands.interactive.get_docker_client", return_value=MagicMock()),
-            patch("iterare_llm.commands.interactive.generate_run_name", return_value="interactive-abc123"),
-            patch("iterare_llm.commands.interactive.get_current_branch", return_value="main"),
+            patch(
+                "iterare_llm.commands.interactive.get_docker_client",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "iterare_llm.commands.interactive.generate_run_name",
+                return_value="interactive-abc123",
+            ),
+            patch(
+                "iterare_llm.commands.interactive.get_current_branch",
+                return_value="main",
+            ),
             patch("iterare_llm.commands.interactive.validate_launch_requirements"),
-            patch("iterare_llm.commands.interactive.create_worktree", return_value=worktree_path),
-            patch("iterare_llm.commands.interactive.worktree_exists", return_value=True),
-            patch("iterare_llm.commands.interactive.get_worktree_path", return_value=worktree_path),
-            patch("iterare_llm.commands.interactive.get_claude_credentials_path", return_value=creds_path),
-            patch("iterare_llm.commands.interactive.get_image_user", return_value="node"),
-            patch("iterare_llm.commands.interactive.generate_domains_file", return_value=domains_file),
-            patch("iterare_llm.commands.interactive.get_log_file_path", return_value=log_file),
-            patch("iterare_llm.commands.interactive.generate_container_name", return_value="it-interactive-abc123"),
-            patch("iterare_llm.commands.interactive.resolve_environment_variables", return_value={}),
+            patch(
+                "iterare_llm.commands.interactive.create_worktree",
+                return_value=worktree_path,
+            ),
+            patch(
+                "iterare_llm.commands.interactive.worktree_exists", return_value=True
+            ),
+            patch(
+                "iterare_llm.commands.interactive.get_worktree_path",
+                return_value=worktree_path,
+            ),
+            patch(
+                "iterare_llm.commands.interactive.get_claude_credentials_path",
+                return_value=creds_path,
+            ),
+            patch(
+                "iterare_llm.commands.interactive.get_image_user", return_value="node"
+            ),
+            patch(
+                "iterare_llm.commands.interactive.generate_domains_file",
+                return_value=domains_file,
+            ),
+            patch(
+                "iterare_llm.commands.interactive.get_log_file_path",
+                return_value=log_file,
+            ),
+            patch(
+                "iterare_llm.commands.interactive.generate_container_name",
+                return_value="it-interactive-abc123",
+            ),
+            patch(
+                "iterare_llm.commands.interactive.resolve_environment_variables",
+                return_value={},
+            ),
             patch("iterare_llm.commands.interactive.register_run"),
-            patch("iterare_llm.commands.interactive.build_docker_run_command", return_value=["docker", "run", "fake"]),
-            patch("iterare_llm.commands.interactive.subprocess.run", return_value=MagicMock(returncode=0)),
+            patch(
+                "iterare_llm.commands.interactive.build_docker_run_command",
+                return_value=["docker", "run", "fake"],
+            ),
+            patch(
+                "iterare_llm.commands.interactive.subprocess.run",
+                return_value=MagicMock(returncode=0),
+            ),
         ]
         self.mocks = {}
         for p in self.patches:
@@ -195,15 +294,18 @@ class TestInteractiveCommand:
         assert result.exit_code == 0
 
     def test_image_not_found(self):
-        self.mocks["validate_launch_requirements"].side_effect = ImageNotFoundError("missing")
+        self.mocks["validate_launch_requirements"].side_effect = ImageNotFoundError(
+            "missing"
+        )
 
         result = runner.invoke(app, ["interactive"])
 
         assert result.exit_code == 1
-        assert "make build" in result.output
 
     def test_container_already_running(self):
-        self.mocks["validate_launch_requirements"].side_effect = ContainerAlreadyRunningError("busy")
+        self.mocks[
+            "validate_launch_requirements"
+        ].side_effect = ContainerAlreadyRunningError("busy")
 
         result = runner.invoke(app, ["interactive"])
 

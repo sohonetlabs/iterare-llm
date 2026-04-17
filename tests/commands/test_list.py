@@ -13,7 +13,6 @@ runner = CliRunner()
 
 
 class TestGetRunStatus:
-
     def test_active(self):
         docker_client = MagicMock()
         container = MagicMock()
@@ -49,14 +48,18 @@ def test_display_runs_table_empty():
 
 
 class TestListCommand:
-
     @pytest.fixture(autouse=True)
     def setup_patches(self):
         self.patches = [
-            patch("iterare_llm.commands.list.resolve_project_dir", return_value=Path("/project")),
+            patch(
+                "iterare_llm.commands.list.resolve_project_dir",
+                return_value=Path("/project"),
+            ),
             patch("iterare_llm.commands.list.is_git_repository", return_value=True),
             patch("iterare_llm.commands.list.list_runs"),
-            patch("iterare_llm.commands.list.get_docker_client", return_value=MagicMock()),
+            patch(
+                "iterare_llm.commands.list.get_docker_client", return_value=MagicMock()
+            ),
             patch("iterare_llm.commands.list.get_run_status", return_value="finished"),
             patch("iterare_llm.commands.list.worktree_exists", return_value=False),
         ]
@@ -118,6 +121,7 @@ class TestListCommand:
 
     def test_docker_unavailable(self):
         from iterare_llm.exceptions import DockerError
+
         self.mocks["get_docker_client"].side_effect = DockerError("nope")
         self.mocks["list_runs"].return_value = [
             {"run_name": "run-abc", "prompt_name": "task"},
@@ -129,6 +133,7 @@ class TestListCommand:
 
     def test_docker_unavailable_with_worktree(self):
         from iterare_llm.exceptions import DockerError
+
         self.mocks["get_docker_client"].side_effect = DockerError("nope")
         self.mocks["worktree_exists"].return_value = True
         self.mocks["list_runs"].return_value = [

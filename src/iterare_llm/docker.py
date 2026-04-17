@@ -100,6 +100,39 @@ def image_exists(client: docker.DockerClient, image_name: str) -> bool:
         raise DockerError(f"Error checking image existence: {e}") from e
 
 
+def ensure_image(client: docker.DockerClient, image_name: str) -> None:
+    """
+    Ensure a Docker image is available locally, pulling from registry if needed.
+
+    Parameters
+    ----------
+    client : docker.DockerClient
+        Docker client
+    image_name : str
+        Name of the image (e.g., "sohonet/iterare-llm:latest")
+
+    Raises
+    ------
+    ImageNotFoundError
+        If image cannot be found locally or pulled from registry
+    DockerError
+        If a Docker API error occurs during pull
+    """
+    if image_exists(client, image_name):
+        return
+
+    logger.info(f"Image '{image_name}' not found locally, pulling from registry...")
+    try:
+        client.images.pull(image_name)
+        logger.info(f"Successfully pulled image: {image_name}")
+    except docker.errors.ImageNotFound:
+        raise ImageNotFoundError(
+            f"Image '{image_name}' not found locally or in registry."
+        ) from None
+    except docker.errors.APIError as e:
+        raise DockerError(f"Failed to pull image '{image_name}': {e}") from e
+
+
 def get_image_user(client: docker.DockerClient, image_name: str) -> str:
     """
     Get the user that the Docker image runs as.
@@ -446,14 +479,7 @@ def launch_container(
     """
     logger.info(f"Launching container for workspace '{config.workspace_name}'")
 
-    # Check if image exists
-    if not image_exists(client, config.image_name):
-        raise ImageNotFoundError(
-            dedent(f"""
-            Docker image '{config.image_name}' not found.
-            Please build the image first.
-            """).lstrip()
-        )
+    ensure_image(client, config.image_name)
 
     # Check if container already running
     container_name = generate_container_name(config.workspace_name)

@@ -21,7 +21,6 @@ TEST_FILES = Path(__file__).parent / "test_files"
 
 
 class TestGenerateRunName:
-
     def test_format(self):
         result = generate_run_name("refactor-api")
 
@@ -37,7 +36,6 @@ class TestGenerateRunName:
 
 
 class TestGetRunsFile:
-
     @patch("iterare_llm.run.get_app_cache_dir")
     def test_returns_json_in_runs_dir(self, mock_cache_dir, tmp_path):
         mock_cache_dir.return_value = tmp_path
@@ -59,7 +57,6 @@ class TestGetRunsFile:
 
 
 class TestLoadRunsMetadata:
-
     @patch("iterare_llm.run.get_runs_file")
     def test_no_file(self, mock_get_runs_file, tmp_path):
         mock_get_runs_file.return_value = tmp_path / "nonexistent.json"
@@ -86,7 +83,6 @@ class TestLoadRunsMetadata:
 
 
 class TestSaveRunsMetadata:
-
     @patch("iterare_llm.run.get_runs_file")
     def test_writes_json(self, mock_get_runs_file, tmp_path):
         runs_file = tmp_path / "runs" / "runs.json"
@@ -120,7 +116,6 @@ def test_register_run(mock_cache_dir, tmp_path):
 
 
 class TestListRuns:
-
     @patch("iterare_llm.run.get_app_cache_dir")
     def test_empty(self, mock_cache_dir, tmp_path):
         mock_cache_dir.return_value = tmp_path
@@ -140,10 +135,11 @@ class TestListRuns:
 
 
 class TestListRunsWithWorkspaces:
-
     @patch("iterare_llm.run.worktree_exists")
     @patch("iterare_llm.run.get_runs_file")
-    def test_filters_to_existing_worktrees(self, mock_get_runs_file, mock_worktree_exists):
+    def test_filters_to_existing_worktrees(
+        self, mock_get_runs_file, mock_worktree_exists
+    ):
         mock_get_runs_file.return_value = TEST_FILES / "runs_multiple.json"
         mock_worktree_exists.side_effect = lambda _dir, name: name == "new-run"
 

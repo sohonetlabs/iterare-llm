@@ -24,7 +24,6 @@ from iterare_llm.git import (
 
 
 class TestRunGitCommand:
-
     def test_success(self, mock_subprocess_run):
         mock_subprocess_run.return_value.stdout = "output\n"
 
@@ -56,7 +55,6 @@ class TestRunGitCommand:
 
 
 class TestIsGitRepository:
-
     def test_is_repo(self, mock_git):
         result = is_git_repository(Path("/repo"))
 
@@ -71,7 +69,6 @@ class TestIsGitRepository:
 
 
 class TestGetCurrentBranch:
-
     def test_returns_branch_name(self, mock_git):
         result = get_current_branch(Path("/repo"))
 
@@ -85,7 +82,6 @@ class TestGetCurrentBranch:
 
 
 class TestListWorktrees:
-
     def test_parses_porcelain_output(self, mock_git):
         result = list_worktrees(Path("/project"))
 
@@ -106,7 +102,6 @@ def test_get_worktree_path():
 
 
 class TestWorktreeExists:
-
     def test_exists(self, mock_git):
         result = worktree_exists(Path("/project"), "task-1")
 
@@ -137,7 +132,6 @@ class TestWorktreeExists:
 
 
 class TestCreateWorktree:
-
     def test_creates_worktree(self, tmp_path, mock_git):
         mock_git.worktree_paths = []
 
@@ -168,7 +162,6 @@ class TestCreateWorktree:
 
 
 class TestRemoveWorktree:
-
     def test_removes_existing(self, tmp_path, mock_git, mock_subprocess_run):
         worktree_path = str(tmp_path / "workspaces" / "task-1")
         mock_git.worktree_paths = [worktree_path]
@@ -176,7 +169,15 @@ class TestRemoveWorktree:
         remove_worktree(tmp_path, "task-1")
 
         assert mock_subprocess_run.call_args_list[-1] == call(
-            ["git", "-C", str(tmp_path), "worktree", "remove", worktree_path, "--force"],
+            [
+                "git",
+                "-C",
+                str(tmp_path),
+                "worktree",
+                "remove",
+                worktree_path,
+                "--force",
+            ],
             capture_output=True,
             text=True,
             check=True,
@@ -198,7 +199,6 @@ class TestRemoveWorktree:
 
 
 class TestBranchExists:
-
     def test_exists(self, mock_git):
         result = branch_exists(Path("/project"), "main")
 

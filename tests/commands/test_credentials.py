@@ -21,7 +21,6 @@ runner = CliRunner()
 
 
 class TestCredentialsTempDir:
-
     @patch("iterare_llm.commands.credentials.get_tmp_dir")
     def test_creates_and_cleans_up(self, mock_tmp_dir, tmp_path):
         mock_tmp_dir.return_value = tmp_path
@@ -33,7 +32,9 @@ class TestCredentialsTempDir:
 
         assert not temp_dir.exists()
 
-    @patch("iterare_llm.commands.credentials.shutil.rmtree", side_effect=OSError("busy"))
+    @patch(
+        "iterare_llm.commands.credentials.shutil.rmtree", side_effect=OSError("busy")
+    )
     @patch("iterare_llm.commands.credentials.get_tmp_dir")
     def test_cleanup_failure_logs_warning(self, mock_tmp_dir, _, tmp_path, caplog):
         mock_tmp_dir.return_value = tmp_path
@@ -46,32 +47,46 @@ class TestCredentialsTempDir:
 
 
 class TestBuildCredentialsDockerCommand:
-
     def test_root_user(self, tmp_path):
-        result = build_credentials_docker_command("iterare-llm:latest", tmp_path, "root")
+        result = build_credentials_docker_command(
+            "iterare-llm:latest", tmp_path, "root"
+        )
 
         assert result == [
-            "docker", "run", "-it", "--rm",
-            "--entrypoint", "claude",
-            "-v", f"{tmp_path / '.claude'}:/root/.claude:rw",
-            "-v", f"{tmp_path / '.claude.json'}:/root/.claude.json:rw",
+            "docker",
+            "run",
+            "-it",
+            "--rm",
+            "--entrypoint",
+            "claude",
+            "-v",
+            f"{tmp_path / '.claude'}:/root/.claude:rw",
+            "-v",
+            f"{tmp_path / '.claude.json'}:/root/.claude.json:rw",
             "iterare-llm:latest",
         ]
 
     def test_non_root_user(self, tmp_path):
-        result = build_credentials_docker_command("iterare-llm:latest", tmp_path, "node")
+        result = build_credentials_docker_command(
+            "iterare-llm:latest", tmp_path, "node"
+        )
 
         assert result == [
-            "docker", "run", "-it", "--rm",
-            "--entrypoint", "claude",
-            "-v", f"{tmp_path / '.claude'}:/home/node/.claude:rw",
-            "-v", f"{tmp_path / '.claude.json'}:/home/node/.claude.json:rw",
+            "docker",
+            "run",
+            "-it",
+            "--rm",
+            "--entrypoint",
+            "claude",
+            "-v",
+            f"{tmp_path / '.claude'}:/home/node/.claude:rw",
+            "-v",
+            f"{tmp_path / '.claude.json'}:/home/node/.claude.json:rw",
             "iterare-llm:latest",
         ]
 
 
 class TestExtractCredentials:
-
     @pytest.fixture
     def temp_dir_with_creds(self, tmp_path):
         temp_dir = tmp_path / "temp"
@@ -111,7 +126,6 @@ class TestExtractCredentials:
 
 
 class TestCheckExistingCredentials:
-
     def test_both_exist(self, credentials_dir):
         assert check_existing_credentials(credentials_dir) is True
 
@@ -127,7 +141,6 @@ class TestCheckExistingCredentials:
 
 
 class TestCredentialsCommand:
-
     @pytest.fixture(autouse=True)
     def setup_patches(self, tmp_path):
         self.config_dir = tmp_path / "config"
@@ -142,17 +155,37 @@ class TestCredentialsCommand:
             yield d
 
         self.patches = [
-            patch("iterare_llm.commands.credentials.get_app_config_dir", return_value=self.config_dir),
-            patch("iterare_llm.commands.credentials.check_existing_credentials", return_value=False),
-            patch("iterare_llm.commands.credentials.get_docker_client", return_value=MagicMock()),
-            patch("iterare_llm.commands.credentials.image_exists", return_value=True),
-            patch("iterare_llm.commands.credentials.get_image_user", return_value="node"),
-            patch("iterare_llm.commands.credentials.credentials_temp_dir", side_effect=fake_temp_dir),
-            patch("iterare_llm.commands.credentials.subprocess.run", return_value=MagicMock(returncode=0)),
-            patch("iterare_llm.commands.credentials.extract_credentials", return_value=(
-                self.config_dir / ".credentials.json",
-                self.config_dir / ".claude.json",
-            )),
+            patch(
+                "iterare_llm.commands.credentials.get_app_config_dir",
+                return_value=self.config_dir,
+            ),
+            patch(
+                "iterare_llm.commands.credentials.check_existing_credentials",
+                return_value=False,
+            ),
+            patch(
+                "iterare_llm.commands.credentials.get_docker_client",
+                return_value=MagicMock(),
+            ),
+            patch("iterare_llm.commands.credentials.ensure_image"),
+            patch(
+                "iterare_llm.commands.credentials.get_image_user", return_value="node"
+            ),
+            patch(
+                "iterare_llm.commands.credentials.credentials_temp_dir",
+                side_effect=fake_temp_dir,
+            ),
+            patch(
+                "iterare_llm.commands.credentials.subprocess.run",
+                return_value=MagicMock(returncode=0),
+            ),
+            patch(
+                "iterare_llm.commands.credentials.extract_credentials",
+                return_value=(
+                    self.config_dir / ".credentials.json",
+                    self.config_dir / ".claude.json",
+                ),
+            ),
         ]
         self.mocks = {}
         for p in self.patches:
@@ -177,12 +210,14 @@ class TestCredentialsCommand:
         assert "Credentials already exist" in result.output
 
     def test_image_not_found(self):
-        self.mocks["image_exists"].return_value = False
+        self.mocks["ensure_image"].side_effect = ImageNotFoundError(
+            "not found locally or in registry"
+        )
 
         result = runner.invoke(app, ["credentials"])
 
         assert result.exit_code == 1
-        assert "make build" in result.output
+        assert "not found" in result.output
 
     def test_docker_error(self):
         self.mocks["get_docker_client"].side_effect = DockerError("connection refused")
@@ -192,7 +227,9 @@ class TestCredentialsCommand:
         assert result.exit_code == 1
 
     def test_file_not_found(self):
-        self.mocks["extract_credentials"].side_effect = FileNotFoundError("Login was not completed")
+        self.mocks["extract_credentials"].side_effect = FileNotFoundError(
+            "Login was not completed"
+        )
 
         result = runner.invoke(app, ["credentials"])
 

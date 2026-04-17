@@ -329,10 +329,6 @@ def interactive(
 
     except ImageNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
-        typer.echo(
-            "\nTo build the Docker image, run:\n  make build",
-            err=True,
-        )
         raise typer.Exit(1)
 
     except ContainerAlreadyRunningError as e:

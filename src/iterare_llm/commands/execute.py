@@ -268,10 +268,6 @@ def execute(
 
     except ImageNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
-        typer.echo(
-            f"\nTo build the Docker image, run:\n  docker build -t {config.docker.image} .iterare/",
-            err=True,
-        )
         raise typer.Exit(1)
 
     except ContainerAlreadyRunningError as e:

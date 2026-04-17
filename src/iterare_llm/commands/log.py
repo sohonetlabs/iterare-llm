@@ -197,9 +197,7 @@ def display_log_raw(log_file: Path, follow: bool) -> None:
         If True, follow log file (tail -f behavior)
     """
     if not log_file.exists():
-        console.print(
-            f"[yellow]Log file not found: {log_file}[/yellow]"
-        )
+        console.print(f"[yellow]Log file not found: {log_file}[/yellow]")
         return
 
     file_pos = 0

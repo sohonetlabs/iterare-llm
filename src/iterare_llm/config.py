@@ -14,7 +14,7 @@ from iterare_llm.logging import get_logger
 logger = get_logger(__name__)
 
 # Configuration defaults
-DEFAULT_DOCKER_IMAGE = "iterare-llm:latest"
+DEFAULT_DOCKER_IMAGE = "sohonet/iterare-llm:latest"
 DEFAULT_SHELL = "/bin/bash"
 
 
@@ -158,9 +158,7 @@ def build_config_from_dict(data: dict) -> Config:
     )
 
     session_section = data.get("session", dict())
-    session_config = SessionConfig(
-        shell=session_section.get("shell", DEFAULT_SHELL)
-    )
+    session_config = SessionConfig(shell=session_section.get("shell", DEFAULT_SHELL))
 
     claude_section = data.get("claude", dict())
     claude_config = ClaudeConfig(

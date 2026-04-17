@@ -6,7 +6,6 @@ from iterare_llm.logging import get_logger, setup_logging
 
 
 class TestSetupLogging:
-
     def test_verbose_sets_debug(self):
         setup_logging(verbose=True)
 
@@ -19,7 +18,6 @@ class TestSetupLogging:
 
 
 class TestGetLogger:
-
     def test_returns_logger_with_name(self):
         result = get_logger("iterare_llm.git")
 

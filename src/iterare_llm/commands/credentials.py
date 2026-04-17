@@ -9,7 +9,7 @@ from pathlib import Path
 import typer
 
 from iterare_llm.config import DEFAULT_DOCKER_IMAGE
-from iterare_llm.docker import get_docker_client, get_image_user, image_exists
+from iterare_llm.docker import ensure_image, get_docker_client, get_image_user
 from iterare_llm.exceptions import DockerError, ImageNotFoundError, IterareError
 from iterare_llm.logging import get_logger
 from iterare_llm.paths import get_app_config_dir, get_tmp_dir
@@ -220,11 +220,7 @@ def credentials(
         # 3. Connect to Docker and validate image
         logger.info("Connecting to Docker")
         client = get_docker_client()
-        if not image_exists(client, image):
-            raise ImageNotFoundError(
-                f"Docker image '{image}' not found. "
-                "Please build the Docker image first."
-            )
+        ensure_image(client, image)
 
         # 4. Get container user for home directory mapping
         container_user = get_image_user(client, image)
@@ -235,7 +231,9 @@ def credentials(
             logger.info(f"Prepared temp directory: {temp_dir}")
 
             # 6. Build docker command
-            docker_cmd = build_credentials_docker_command(image, temp_dir, container_user)
+            docker_cmd = build_credentials_docker_command(
+                image, temp_dir, container_user
+            )
 
             # 7. Display instructions
             typer.echo("\nStarting Claude Code for authentication...")
@@ -247,7 +245,9 @@ def credentials(
             logger.info(f"Container exited with code: {result.returncode}")
 
             # 9. Extract credentials
-            dest_credentials, dest_claude_json = extract_credentials(temp_dir, config_dir)
+            dest_credentials, dest_claude_json = extract_credentials(
+                temp_dir, config_dir
+            )
 
         # 10. Display success
         typer.echo("\nCredentials saved successfully!")
@@ -268,10 +268,6 @@ def credentials(
 
     except ImageNotFoundError as e:
         typer.echo(f"Error: {e}", err=True)
-        typer.echo(
-            "\nTo build the Docker image, run:\n  make build",
-            err=True,
-        )
         raise typer.Exit(1)
 
     except DockerError as e:

@@ -18,12 +18,17 @@ from iterare_llm.commands.common import (
     run_name_autocomplete,
     validate_launch_requirements,
 )
-from iterare_llm.config import Config, DockerConfig, SessionConfig, ClaudeConfig, FirewallConfig
+from iterare_llm.config import (
+    Config,
+    DockerConfig,
+    SessionConfig,
+    ClaudeConfig,
+    FirewallConfig,
+)
 from iterare_llm.exceptions import ContainerAlreadyRunningError, ImageNotFoundError
 
 
 class TestResolveProjectDir:
-
     def test_none_returns_cwd(self):
         result = resolve_project_dir(None)
 
@@ -37,7 +42,6 @@ class TestResolveProjectDir:
 
 
 class TestRunNameAutocomplete:
-
     @patch("iterare_llm.commands.common.list_runs")
     def test_filters_by_prefix(self, mock_list_runs):
         mock_list_runs.return_value = [
@@ -69,7 +73,6 @@ class TestRunNameAutocomplete:
 
 
 class TestRunIdAutocomplete:
-
     @patch("iterare_llm.commands.common.list_runs_with_workspaces")
     def test_filters_by_prefix(self, mock_list):
         mock_list.return_value = ["task-abc", "task-def", "other-ghi"]
@@ -86,7 +89,10 @@ class TestRunIdAutocomplete:
 
         assert result == ["task-abc", "other-ghi"]
 
-    @patch("iterare_llm.commands.common.list_runs_with_workspaces", side_effect=Exception("boom"))
+    @patch(
+        "iterare_llm.commands.common.list_runs_with_workspaces",
+        side_effect=Exception("boom"),
+    )
     def test_exception_returns_empty(self, _):
         result = run_id_autocomplete("task")
 
@@ -94,7 +100,6 @@ class TestRunIdAutocomplete:
 
 
 class TestGetCurrentRun:
-
     @patch("iterare_llm.commands.common.list_runs")
     def test_returns_most_recent(self, mock_list_runs):
         mock_list_runs.return_value = [
@@ -114,7 +119,6 @@ class TestGetCurrentRun:
 
 
 class TestResolveEnvironmentVariables:
-
     def test_resolves_set_variables(self):
         with patch.dict("os.environ", {"MY_VAR": "my_value", "OTHER": "other_value"}):
             result = resolve_environment_variables(["MY_VAR", "OTHER"])
@@ -128,7 +132,6 @@ class TestResolveEnvironmentVariables:
 
 
 class TestCleanupOnInterrupt:
-
     def test_calls_remove_worktree(self, mock_git):
         mock_git.worktree_paths = ["/repo/workspaces/task-1"]
 
@@ -141,7 +144,6 @@ class TestCleanupOnInterrupt:
 
 
 class TestValidateLaunchRequirements:
-
     @pytest.fixture
     def config(self):
         return Config(
@@ -159,7 +161,9 @@ class TestValidateLaunchRequirements:
 
     def test_image_not_found(self, config, mock_docker_client):
         import docker.errors
+
         mock_docker_client.images.get.side_effect = docker.errors.ImageNotFound("nope")
+        mock_docker_client.images.pull.side_effect = docker.errors.ImageNotFound("nope")
 
         with pytest.raises(ImageNotFoundError):
             validate_launch_requirements(config, mock_docker_client, "task-1")

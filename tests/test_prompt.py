@@ -21,7 +21,6 @@ TEST_FILES = Path(__file__).parent / "test_files"
 
 
 class TestExtractFrontmatter:
-
     def test_with_frontmatter(self):
         content = (TEST_FILES / "prompt_with_frontmatter.md").read_text()
 
@@ -48,7 +47,6 @@ class TestExtractFrontmatter:
 
 
 class TestParseYamlFrontmatter:
-
     def test_valid_yaml(self):
         result = parse_yaml_frontmatter("workspace: my-task\nbranch: main")
 
@@ -70,7 +68,6 @@ class TestParseYamlFrontmatter:
 
 
 class TestIsPromptName:
-
     @pytest.mark.parametrize("value", ["example", "refactor-api", "my_task"])
     def test_names(self, value):
         assert is_prompt_name(value) is True
@@ -89,7 +86,6 @@ class TestIsPromptName:
 
 
 class TestFindPromptByName:
-
     def test_found(self, tmp_path):
         prompt_file = tmp_path / "my-task.md"
         prompt_file.write_text("content")
@@ -110,7 +106,6 @@ class TestFindPromptByName:
 
 
 class TestResolvePromptPath:
-
     def test_resolve_by_name(self, project_dir):
         prompt_file = project_dir / ".iterare" / "prompts" / "my-task.md"
         prompt_file.write_text("content")
@@ -145,7 +140,6 @@ class TestResolvePromptPath:
 
 
 class TestListPrompts:
-
     def test_lists_md_files(self, project_dir):
         prompts_dir = project_dir / ".iterare" / "prompts"
         (prompts_dir / "alpha.md").write_text("a")
@@ -167,7 +161,6 @@ class TestListPrompts:
 
 
 class TestParsePromptFile:
-
     def test_with_frontmatter(self):
         result = parse_prompt_file(TEST_FILES / "prompt_with_frontmatter.md")
 
@@ -205,7 +198,6 @@ class TestParsePromptFile:
 
 
 class TestGetWorkspaceNameFromPrompt:
-
     def test_uses_frontmatter_workspace(self, sample_prompt):
         result = get_workspace_name_from_prompt(sample_prompt)
 

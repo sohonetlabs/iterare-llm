@@ -12,13 +12,18 @@ runner = CliRunner()
 
 
 class TestCleanupCommand:
-
     @pytest.fixture(autouse=True)
     def setup_patches(self):
         self.patches = [
-            patch("iterare_llm.commands.cleanup.resolve_project_dir", return_value=Path("/project")),
+            patch(
+                "iterare_llm.commands.cleanup.resolve_project_dir",
+                return_value=Path("/project"),
+            ),
             patch("iterare_llm.commands.cleanup.is_git_repository", return_value=True),
-            patch("iterare_llm.commands.cleanup.get_current_run", return_value="run-abc123"),
+            patch(
+                "iterare_llm.commands.cleanup.get_current_run",
+                return_value="run-abc123",
+            ),
             patch("iterare_llm.commands.cleanup.worktree_exists", return_value=True),
             patch("iterare_llm.commands.cleanup.branch_exists", return_value=True),
             patch("iterare_llm.commands.cleanup.remove_worktree"),

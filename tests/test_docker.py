@@ -3,7 +3,7 @@
 import docker.errors
 import pytest
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, call
 
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +12,7 @@ from iterare_llm.docker import (
     build_container_config,
     build_volume_mounts,
     container_running,
+    ensure_image,
     find_container_by_name,
     generate_container_name,
     generate_domains_file,
@@ -28,21 +29,21 @@ from iterare_llm.exceptions import (
 
 
 class TestGetDockerClient:
-
     def test_success(self, mock_docker_client):
         result = get_docker_client()
 
         assert result is mock_docker_client
 
     def test_connection_failure(self, mock_docker_client):
-        mock_docker_client.ping.side_effect = docker.errors.DockerException("connection refused")
+        mock_docker_client.ping.side_effect = docker.errors.DockerException(
+            "connection refused"
+        )
 
         with pytest.raises(DockerError, match="Failed to connect"):
             get_docker_client()
 
 
 class TestImageExists:
-
     def test_exists(self, mock_docker_client):
         result = image_exists(mock_docker_client, "iterare-llm:latest")
 
@@ -56,14 +57,49 @@ class TestImageExists:
         assert result is False
 
     def test_docker_error(self, mock_docker_client):
-        mock_docker_client.images.get.side_effect = docker.errors.DockerException("boom")
+        mock_docker_client.images.get.side_effect = docker.errors.DockerException(
+            "boom"
+        )
 
         with pytest.raises(DockerError, match="Error checking image"):
             image_exists(mock_docker_client, "bad:latest")
 
 
-class TestGetImageUser:
+class TestEnsureImage:
+    def test_exists_locally(self, mock_docker_client):
+        ensure_image(mock_docker_client, "iterare-llm:latest")
 
+        assert mock_docker_client.images.pull.call_args_list == []
+
+    def test_pulls_when_not_local(self, mock_docker_client):
+        mock_docker_client.images.get.side_effect = docker.errors.ImageNotFound("nope")
+
+        ensure_image(mock_docker_client, "sohonet/iterare-llm:latest")
+
+        assert mock_docker_client.images.pull.call_args_list == [
+            call("sohonet/iterare-llm:latest")
+        ]
+
+    def test_pull_not_found_in_registry(self, mock_docker_client):
+        mock_docker_client.images.get.side_effect = docker.errors.ImageNotFound("nope")
+        mock_docker_client.images.pull.side_effect = docker.errors.ImageNotFound("nope")
+
+        with pytest.raises(
+            ImageNotFoundError, match="not found locally or in registry"
+        ):
+            ensure_image(mock_docker_client, "missing:latest")
+
+    def test_pull_api_error(self, mock_docker_client):
+        mock_docker_client.images.get.side_effect = docker.errors.ImageNotFound("nope")
+        mock_docker_client.images.pull.side_effect = docker.errors.APIError(
+            "unauthorized"
+        )
+
+        with pytest.raises(DockerError, match="Failed to pull"):
+            ensure_image(mock_docker_client, "private/image:latest")
+
+
+class TestGetImageUser:
     def test_returns_user(self, mock_docker_client):
         image = MagicMock()
         image.attrs = {"Config": {"User": "node"}}
@@ -89,14 +125,15 @@ class TestGetImageUser:
             get_image_user(mock_docker_client, "missing:latest")
 
     def test_docker_error(self, mock_docker_client):
-        mock_docker_client.images.get.side_effect = docker.errors.DockerException("boom")
+        mock_docker_client.images.get.side_effect = docker.errors.DockerException(
+            "boom"
+        )
 
         with pytest.raises(DockerError, match="Error inspecting image"):
             get_image_user(mock_docker_client, "bad:latest")
 
 
 class TestFindContainerByName:
-
     def test_found(self, mock_docker_client):
         container = MagicMock()
         container.name = "it-task-1"
@@ -123,14 +160,15 @@ class TestFindContainerByName:
         assert result is None
 
     def test_docker_error(self, mock_docker_client):
-        mock_docker_client.containers.list.side_effect = docker.errors.DockerException("boom")
+        mock_docker_client.containers.list.side_effect = docker.errors.DockerException(
+            "boom"
+        )
 
         with pytest.raises(DockerError, match="Error searching for container"):
             find_container_by_name(mock_docker_client, "it-task-1")
 
 
 class TestContainerRunning:
-
     def test_running(self, mock_docker_client):
         container = MagicMock()
         container.name = "it-task-1"
@@ -166,7 +204,6 @@ def test_generate_container_name():
 
 
 class TestGenerateDomainsFile:
-
     @patch("iterare_llm.docker.get_tmp_dir")
     def test_writes_domains(self, mock_tmp_dir, tmp_path):
         mock_tmp_dir.return_value = tmp_path
@@ -193,7 +230,6 @@ class TestGenerateDomainsFile:
 
 
 class TestBuildVolumeMounts:
-
     @pytest.fixture(autouse=True)
     def setup_files(self, tmp_path):
         self.domains_file = tmp_path / "domains.txt"
@@ -208,7 +244,10 @@ class TestBuildVolumeMounts:
 
         assert result == {
             str(cfg.worktree_path): {"bind": "/workspace", "mode": "rw"},
-            str(cfg.claude_credentials_path / ".credentials.json"): {"bind": "/root/.claude/.credentials.json", "mode": "rw"},
+            str(cfg.claude_credentials_path / ".credentials.json"): {
+                "bind": "/root/.claude/.credentials.json",
+                "mode": "rw",
+            },
             str(cfg.claude_config_file): {"bind": "/root/.claude.json", "mode": "rw"},
             str(self.domains_file): {"bind": "/etc/iterare-domains.txt", "mode": "ro"},
             str(self.log_file): {"bind": "/var/log/iterare.log", "mode": "rw"},
@@ -221,15 +260,20 @@ class TestBuildVolumeMounts:
 
         assert result == {
             str(cfg.worktree_path): {"bind": "/workspace", "mode": "rw"},
-            str(cfg.claude_credentials_path / ".credentials.json"): {"bind": "/home/node/.claude/.credentials.json", "mode": "rw"},
-            str(cfg.claude_config_file): {"bind": "/home/node/.claude.json", "mode": "rw"},
+            str(cfg.claude_credentials_path / ".credentials.json"): {
+                "bind": "/home/node/.claude/.credentials.json",
+                "mode": "rw",
+            },
+            str(cfg.claude_config_file): {
+                "bind": "/home/node/.claude.json",
+                "mode": "rw",
+            },
             str(self.domains_file): {"bind": "/etc/iterare-domains.txt", "mode": "ro"},
             str(self.log_file): {"bind": "/var/log/iterare.log", "mode": "rw"},
         }
 
 
 class TestBuildContainerConfig:
-
     @pytest.fixture(autouse=True)
     def setup_files(self, tmp_path):
         self.domains_file = tmp_path / "domains.txt"
@@ -238,7 +282,9 @@ class TestBuildContainerConfig:
         self.log_file.touch()
 
     def test_basic_config(self, sample_execution_config):
-        result = build_container_config(sample_execution_config, "node", self.domains_file, self.log_file)
+        result = build_container_config(
+            sample_execution_config, "node", self.domains_file, self.log_file
+        )
 
         assert result["image"] == "iterare-llm:latest"
         assert result["name"] == "it-test-run-abc123"
@@ -251,19 +297,23 @@ class TestBuildContainerConfig:
     def test_with_environment(self, sample_execution_config):
         sample_execution_config.environment = {"PIP_INDEX_URL": "https://pypi.internal"}
 
-        result = build_container_config(sample_execution_config, "node", self.domains_file, self.log_file)
+        result = build_container_config(
+            sample_execution_config, "node", self.domains_file, self.log_file
+        )
 
         assert result["environment"] == {"PIP_INDEX_URL": "https://pypi.internal"}
 
 
 class TestLaunchContainer:
-
     @pytest.fixture(autouse=True)
     def setup_paths(self, tmp_path):
         self.tmp_path = tmp_path
         self.patches = [
             patch("iterare_llm.docker.get_tmp_dir", return_value=tmp_path / "tmp"),
-            patch("iterare_llm.docker.get_log_file_path", return_value=tmp_path / "logs" / "run.log"),
+            patch(
+                "iterare_llm.docker.get_log_file_path",
+                return_value=tmp_path / "logs" / "run.log",
+            ),
         ]
         for p in self.patches:
             p.start()
@@ -289,13 +339,18 @@ class TestLaunchContainer:
 
         assert result == "abc123def456"
 
-    def test_image_not_found_precheck(self, mock_docker_client, sample_execution_config):
+    def test_image_not_found_precheck(
+        self, mock_docker_client, sample_execution_config
+    ):
         mock_docker_client.images.get.side_effect = docker.errors.ImageNotFound("nope")
+        mock_docker_client.images.pull.side_effect = docker.errors.ImageNotFound("nope")
 
         with pytest.raises(ImageNotFoundError):
             launch_container(mock_docker_client, sample_execution_config, "run-abc123")
 
-    def test_container_already_running(self, mock_docker_client, sample_execution_config):
+    def test_container_already_running(
+        self, mock_docker_client, sample_execution_config
+    ):
         mock_docker_client.images.get.return_value = MagicMock()
         container = MagicMock()
         container.name = "it-test-run-abc123"
@@ -326,7 +381,9 @@ class TestLaunchContainer:
             launch_container(ready_client, sample_execution_config, "run-abc123")
 
     def test_run_docker_exception(self, ready_client, sample_execution_config):
-        ready_client.containers.run.side_effect = docker.errors.DockerException("generic")
+        ready_client.containers.run.side_effect = docker.errors.DockerException(
+            "generic"
+        )
 
         with pytest.raises(DockerError, match="Failed to launch container"):
             launch_container(ready_client, sample_execution_config, "run-abc123")
