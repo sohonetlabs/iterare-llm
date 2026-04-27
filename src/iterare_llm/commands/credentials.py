@@ -68,9 +68,9 @@ def build_credentials_docker_command(
     """
     Build docker run command for credential capture.
 
-    Uses ``--entrypoint claude`` to bypass the normal entrypoint (which sets up
-    firewall and expects a prompt). No ``--cap-add NET_ADMIN`` is needed since
-    the firewall is not configured.
+    Uses ``--entrypoint claude`` with the ``auth login`` subcommand so the
+    container runs only the login flow and exits automatically when complete.
+    No ``--cap-add NET_ADMIN`` is needed since the firewall is not configured.
 
     Parameters
     ----------
@@ -106,6 +106,8 @@ def build_credentials_docker_command(
         "-v",
         f"{temp_dir / '.claude.json'}:{claude_json_mount}:rw",
         image_name,
+        "auth",
+        "login",
     ]
 
     logger.debug(f"Built credentials docker command for user '{container_user}'")
@@ -236,8 +238,8 @@ def credentials(
             )
 
             # 7. Display instructions
-            typer.echo("\nStarting Claude Code for authentication...")
-            typer.echo("Log in to Claude, then exit (type /exit or Ctrl+D).\n")
+            typer.echo("\nStarting Claude Code login flow...")
+            typer.echo("Follow the prompts to authenticate; the session will exit automatically.\n")
 
             # 8. Run interactive container
             logger.info(f"Running: {' '.join(docker_cmd)}")

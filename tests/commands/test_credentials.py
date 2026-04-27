@@ -64,6 +64,8 @@ class TestBuildCredentialsDockerCommand:
             "-v",
             f"{tmp_path / '.claude.json'}:/root/.claude.json:rw",
             "iterare-llm:latest",
+            "auth",
+            "login",
         ]
 
     def test_non_root_user(self, tmp_path):
@@ -83,6 +85,8 @@ class TestBuildCredentialsDockerCommand:
             "-v",
             f"{tmp_path / '.claude.json'}:/home/node/.claude.json:rw",
             "iterare-llm:latest",
+            "auth",
+            "login",
         ]
 
 
