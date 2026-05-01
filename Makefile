@@ -1,4 +1,4 @@
-.PHONY: build build-multiarch push sync lock lint lint-fix format test coverage
+.PHONY: build build-multiarch push sync lock lint lint-fix format test coverage build-pkg publish
 
 IMAGE_NAME = iterare-llm
 REGISTRY = sohonet/iterare-llm
@@ -39,3 +39,10 @@ test:
 
 coverage:
 	uv run pytest --cov=src --cov-report=term-missing --cov-report=html tests/
+
+# Packaging commands
+build-pkg:
+	uv build
+
+publish:
+	uv publish

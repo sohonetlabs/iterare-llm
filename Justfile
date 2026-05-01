@@ -59,3 +59,13 @@ test:
 # Run tests with coverage report
 coverage:
     uv run pytest --cov=src --cov-report=term-missing --cov-report=html tests/
+
+# Packaging commands
+
+# Build wheel and sdist into dist/
+build-pkg:
+    uv build
+
+# Publish built artifacts in dist/ to PyPI (uses UV_PUBLISH_TOKEN if set)
+publish:
+    uv publish
