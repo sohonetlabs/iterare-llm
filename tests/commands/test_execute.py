@@ -15,6 +15,7 @@ from iterare_llm.exceptions import (
     CredentialsNotFoundError,
     ImageNotFoundError,
     IterareError,
+    NetworkNotFoundError,
 )
 from iterare_llm.main import app
 
@@ -107,6 +108,14 @@ class TestExecuteCommand:
             patch(
                 "iterare_llm.commands.execute.resolve_environment_variables",
                 return_value={},
+            ),
+            patch(
+                "iterare_llm.commands.execute.get_docker_networks",
+                return_value=[],
+            ),
+            patch(
+                "iterare_llm.commands.execute.get_docker_network_subnets",
+                return_value=[],
             ),
             patch(
                 "iterare_llm.commands.execute.get_claude_credentials_path",
@@ -209,3 +218,66 @@ class TestExecuteCommand:
         result = runner.invoke(app, ["execute", "task", "--env", "MY_VAR"])
 
         assert result.exit_code == 0
+
+    def test_with_docker_network(self):
+        self.mocks["get_docker_networks"].return_value = ["my-net"]
+        self.mocks["get_docker_network_subnets"].return_value = ["10.0.0.0/24"]
+
+        result = runner.invoke(app, ["execute", "task", "--docker-network", "my-net"])
+
+        assert result.exit_code == 0
+        # use_compose stays False unless --dc is given
+        call_args = self.mocks["get_docker_networks"].call_args.args
+        assert call_args[1] == ["my-net"]
+        assert call_args[2] is False
+        exec_config = self.mocks["launch_container"].call_args.args[1]
+        assert exec_config.networks == ["my-net"]
+        assert exec_config.network_subnets == ["10.0.0.0/24"]
+
+    def test_with_docker_network_short_alias(self):
+        self.mocks["get_docker_networks"].return_value = ["alias-net"]
+
+        result = runner.invoke(app, ["execute", "task", "--dn", "alias-net"])
+
+        assert result.exit_code == 0
+
+    def test_with_docker_compose_flag(self):
+        self.mocks["get_docker_networks"].return_value = ["myproj_default"]
+
+        result = runner.invoke(app, ["execute", "task", "--docker-compose"])
+
+        assert result.exit_code == 0
+        call_args = self.mocks["get_docker_networks"].call_args.args
+        assert call_args[1] is None
+        assert call_args[2] is True
+
+    def test_with_docker_compose_short_alias(self):
+        self.mocks["get_docker_networks"].return_value = ["myproj_default"]
+
+        result = runner.invoke(app, ["execute", "task", "--dc"])
+
+        assert result.exit_code == 0
+        assert self.mocks["get_docker_networks"].call_args.args[2] is True
+
+    def test_with_dn_and_dc_combined(self):
+        self.mocks["get_docker_networks"].return_value = [
+            "my-net",
+            "myproj_default",
+        ]
+
+        result = runner.invoke(app, ["execute", "task", "--dn", "my-net", "--dc"])
+
+        assert result.exit_code == 0
+        call_args = self.mocks["get_docker_networks"].call_args.args
+        assert call_args[1] == ["my-net"]
+        assert call_args[2] is True
+
+    def test_network_not_found(self):
+        self.mocks["get_docker_networks"].side_effect = NetworkNotFoundError(
+            "Docker network 'gone' does not exist."
+        )
+
+        result = runner.invoke(app, ["execute", "task", "--dn", "gone"])
+
+        assert result.exit_code == 1
+        assert "docker network ls" in result.output

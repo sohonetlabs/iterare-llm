@@ -2,7 +2,6 @@
 
 import logging
 from contextlib import contextmanager
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -40,7 +39,7 @@ class TestCredentialsTempDir:
         mock_tmp_dir.return_value = tmp_path
 
         with caplog.at_level(logging.WARNING):
-            with credentials_temp_dir() as temp_dir:
+            with credentials_temp_dir():
                 pass
 
         assert "Failed to clean up" in caplog.text
@@ -196,10 +195,17 @@ class TestCredentialsCommand:
             p.stop()
 
     def test_success(self):
-        result = runner.invoke(app, ["credentials"])
+        result = runner.invoke(app, ["credentials"], input="\n")
 
         assert result.exit_code == 0
         assert "Credentials saved successfully" in result.output
+
+    def test_displays_acknowledgement_prompt(self):
+        result = runner.invoke(app, ["credentials"], input="\n")
+
+        assert result.exit_code == 0
+        assert "Press Enter to continue" in result.output
+        assert "manually" in result.output
 
     def test_existing_credentials_without_force(self):
         self.mocks["check_existing_credentials"].return_value = True
@@ -231,7 +237,7 @@ class TestCredentialsCommand:
             "Login was not completed"
         )
 
-        result = runner.invoke(app, ["credentials"])
+        result = runner.invoke(app, ["credentials"], input="\n")
 
         assert result.exit_code == 1
         assert "Login was not completed" in result.output
@@ -254,6 +260,6 @@ class TestCredentialsCommand:
     def test_keyboard_interrupt(self):
         self.mocks["run"].side_effect = KeyboardInterrupt()
 
-        result = runner.invoke(app, ["credentials"])
+        result = runner.invoke(app, ["credentials"], input="\n")
 
         assert result.exit_code == 130

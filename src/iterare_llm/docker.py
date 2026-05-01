@@ -1,21 +1,27 @@
 """Docker container management for iterare."""
 
-from dataclasses import dataclass
+import os
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 from textwrap import dedent
 
 import docker
 import docker.errors
+import yaml
 
 from iterare_llm.exceptions import (
     ContainerAlreadyRunningError,
     DockerError,
     ImageNotFoundError,
+    NetworkNotFoundError,
 )
 from iterare_llm.logging import get_logger
 from iterare_llm.paths import get_log_file_path, get_tmp_dir
 
 logger = get_logger(__name__)
+
+NETWORK_SUBNETS_ENV_VAR = "ITERARE_NETWORK_SUBNETS"
 
 
 @dataclass
@@ -30,6 +36,8 @@ class ExecutionConfig:
     prompt_content: str
     allowed_domains: list[str]
     environment: dict[str, str] | None = None
+    networks: list[str] = field(default_factory=list)
+    network_subnets: list[str] = field(default_factory=list)
 
 
 def get_docker_client() -> docker.DockerClient:
@@ -338,6 +346,344 @@ def generate_domains_file(allowed_domains: list[str], run_name: str) -> Path:
         raise OSError(f"Failed to generate domains file: {e}") from e
 
 
+def network_exists(client: docker.DockerClient, network_name: str) -> bool:
+    """
+    Check whether a Docker network exists.
+
+    Parameters
+    ----------
+    client : docker.DockerClient
+        Docker client
+    network_name : str
+        Network name to look up
+
+    Returns
+    -------
+    bool
+        True if network exists, False otherwise
+
+    Raises
+    ------
+    DockerError
+        If a non-NotFound Docker error occurs while looking up the network
+    """
+    logger.debug(f"Checking if Docker network exists: {network_name}")
+    try:
+        client.networks.get(network_name)
+        return True
+    except docker.errors.NotFound:
+        return False
+    except docker.errors.DockerException as e:
+        logger.error(f"Error inspecting docker network '{network_name}': {e}")
+        raise DockerError(f"Error inspecting docker network: {e}") from e
+
+
+def get_network_subnets(client: docker.DockerClient, network_name: str) -> list[str]:
+    """
+    Return the IPAM-configured subnets for a Docker network.
+
+    Parameters
+    ----------
+    client : docker.DockerClient
+        Docker client
+    network_name : str
+        Network name
+
+    Returns
+    -------
+    list[str]
+        List of subnet CIDR strings (e.g. ["172.18.0.0/16"]). Empty if the
+        network has no IPAM configuration.
+
+    Raises
+    ------
+    NetworkNotFoundError
+        If the network does not exist
+    DockerError
+        If a Docker API error occurs
+    """
+    logger.debug(f"Getting subnets for network '{network_name}'")
+    try:
+        network = client.networks.get(network_name)
+    except docker.errors.NotFound:
+        raise NetworkNotFoundError(
+            f"Docker network '{network_name}' not found"
+        ) from None
+    except docker.errors.DockerException as e:
+        raise DockerError(f"Error inspecting docker network: {e}") from e
+
+    ipam = network.attrs.get("IPAM") or {}
+    configs = ipam.get("Config") or []
+    subnets = [c["Subnet"] for c in configs if c.get("Subnet")]
+    logger.debug(f"Network '{network_name}' subnets: {subnets}")
+    return subnets
+
+
+def list_docker_networks() -> list[str]:
+    """
+    List names of Docker networks visible to the current daemon.
+
+    Returns an empty list when Docker is unreachable so this can be used in
+    autocomplete callbacks without crashing the shell.
+
+    Returns
+    -------
+    list[str]
+        Names of Docker networks. Empty if Docker is unavailable.
+    """
+    try:
+        client = get_docker_client()
+        return [n.name for n in client.networks.list()]
+    except Exception:
+        return []
+
+
+def docker_network_autocomplete(incomplete: str) -> list[str]:
+    """
+    Autocomplete callback for Docker network names.
+
+    Parameters
+    ----------
+    incomplete : str
+        Partial network name typed by the user
+
+    Returns
+    -------
+    list[str]
+        Matching network names
+    """
+    networks = list_docker_networks()
+    if incomplete:
+        networks = [n for n in networks if n.startswith(incomplete)]
+    return networks
+
+
+def sanitize_compose_project_name(raw: str) -> str:
+    """Apply Docker Compose's project-name normalisation rules."""
+    cleaned = re.sub(r"[^a-z0-9_-]+", "", raw.lower())
+    return cleaned.lstrip("_-")
+
+
+def load_compose_file(compose_file: Path) -> dict:
+    """Parse a compose file as a dict, returning ``{}`` on read or parse failure."""
+    try:
+        data = yaml.safe_load(compose_file.read_text())
+    except (OSError, yaml.YAMLError) as e:
+        logger.debug(f"Could not read compose file '{compose_file}': {e}")
+        data = None
+    return data if isinstance(data, dict) else {}
+
+
+def read_compose_project_name(compose_file: Path) -> str | None:
+    """Read the optional top-level ``name`` field from a compose file."""
+    name = load_compose_file(compose_file).get("name")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    return sanitize_compose_project_name(name)
+
+
+def read_dotenv_compose_project_name(project_dir: Path) -> str | None:
+    """Read ``COMPOSE_PROJECT_NAME`` from a ``.env`` file in *project_dir*."""
+    env_file = project_dir / ".env"
+    if not env_file.is_file():
+        return None
+    try:
+        lines = env_file.read_text().splitlines()
+    except OSError as e:
+        logger.debug(f"Could not read .env file '{env_file}': {e}")
+        return None
+
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "COMPOSE_PROJECT_NAME":
+            value = value.strip().strip("'").strip('"')
+            return sanitize_compose_project_name(value) if value else None
+    return None
+
+
+def detect_compose_network(project_dir: Path) -> str | None:
+    """
+    Detect the default network name a docker-compose.yml in *project_dir* would create.
+
+    Looks for ``docker-compose.yml`` or ``compose.yml`` in *project_dir``. If
+    found, the returned name follows Docker Compose conventions:
+    ``<project>_default``. Project name precedence matches Docker Compose:
+
+    1. ``COMPOSE_PROJECT_NAME`` from the process environment
+    2. ``COMPOSE_PROJECT_NAME`` from the project's ``.env`` file
+    3. Top-level ``name:`` field in the compose file
+    4. Sanitized basename of *project_dir*
+
+    Parameters
+    ----------
+    project_dir : Path
+        Project root to inspect
+
+    Returns
+    -------
+    str | None
+        Network name, or None if no compose file is present
+    """
+    candidates = [
+        project_dir / "docker-compose.yml",
+        project_dir / "docker-compose.yaml",
+        project_dir / "compose.yml",
+        project_dir / "compose.yaml",
+    ]
+    compose_file = next((c for c in candidates if c.is_file()), None)
+    if not compose_file:
+        return None
+
+    env_value = os.environ.get("COMPOSE_PROJECT_NAME", "").strip()
+    project_name = (
+        (sanitize_compose_project_name(env_value) if env_value else None)
+        or read_dotenv_compose_project_name(project_dir)
+        or read_compose_project_name(compose_file)
+        or sanitize_compose_project_name(project_dir.name)
+    )
+    if not project_name:
+        logger.debug(f"Could not derive a compose project name from '{project_dir}'")
+        return None
+
+    network_name = f"{project_name}_default"
+    logger.debug(f"Detected compose default network: {network_name}")
+    return network_name
+
+
+def get_docker_networks(
+    client: docker.DockerClient,
+    networks: list[str] | None,
+    use_compose: bool,
+    project_dir: Path,
+) -> list[str]:
+    """
+    Resolve the list of Docker networks to attach a container to.
+
+    Explicit *networks* are validated and every name must exist or
+    :class:`NetworkNotFoundError` is raised. When *use_compose* is true,
+    the project directory is additionally scanned for a docker-compose
+    file and its default network appended if currently active.
+
+    Parameters
+    ----------
+    client : docker.DockerClient
+        Docker client
+    networks : list[str] | None
+        Explicit networks requested by the user via ``--docker-network``
+    use_compose : bool
+        Whether to detect and attach the docker-compose default network
+    project_dir : Path
+        Project root used to detect docker-compose default networks
+
+    Returns
+    -------
+    list[str]
+        Validated network names, deduplicated. Explicit names appear in
+        sorted order; the compose-detected network (if any) is appended
+        last.
+
+    Raises
+    ------
+    NetworkNotFoundError
+        If a user-specified network does not exist
+    """
+    resolved: list[str] = []
+
+    if networks:
+        for name in sorted(set(networks)):
+            if not network_exists(client, name):
+                raise NetworkNotFoundError(f"Docker network '{name}' does not exist.")
+            resolved.append(name)
+
+    if use_compose:
+        compose_network = detect_compose_network(project_dir)
+        if compose_network is None:
+            logger.info(
+                "No docker-compose file detected in project directory; "
+                "skipping compose network attachment."
+            )
+        elif not network_exists(client, compose_network):
+            logger.info(
+                f"Detected compose network '{compose_network}' is not currently active; "
+                "skipping compose network attachment."
+            )
+        elif compose_network not in resolved:
+            resolved.append(compose_network)
+
+    if resolved:
+        logger.info(f"Resolved Docker networks: {resolved}")
+
+    return resolved
+
+
+def get_docker_network_subnets(
+    client: docker.DockerClient, networks: list[str]
+) -> list[str]:
+    """
+    Aggregate the subnets configured for a list of Docker networks.
+
+    Parameters
+    ----------
+    client : docker.DockerClient
+        Docker client
+    networks : list[str]
+        Network names to inspect
+
+    Returns
+    -------
+    list[str]
+        Deduplicated list of subnet CIDR strings
+    """
+    subnets = {
+        subnet
+        for network in networks
+        for subnet in get_network_subnets(client, network)
+    }
+    return sorted(subnets)
+
+
+def attach_additional_networks(
+    client: docker.DockerClient,
+    container,
+    networks: list[str],
+) -> None:
+    """
+    Connect a running container to extra Docker networks.
+
+    The first attached network is wired up at container creation time
+    via Docker SDK's ``network`` parameter, so this helper handles the
+    second and subsequent entries by calling ``network.connect``.
+
+    Parameters
+    ----------
+    client : docker.DockerClient
+        Docker client
+    container : docker.models.containers.Container
+        The running container
+    networks : list[str]
+        All resolved networks (the first is assumed already attached)
+
+    Raises
+    ------
+    DockerError
+        If the SDK fails to connect a network
+    """
+    if len(networks) <= 1:
+        return
+
+    for name in networks[1:]:
+        logger.info(f"Connecting container to additional network '{name}'")
+        try:
+            client.networks.get(name).connect(container)
+        except docker.errors.DockerException as e:
+            raise DockerError(
+                f"Failed to connect container to network '{name}': {e}"
+            ) from e
+
+
 def build_volume_mounts(
     config: ExecutionConfig, container_user: str, domains_file: Path, log_file: Path
 ) -> dict:
@@ -425,12 +771,25 @@ def build_container_config(
         "cap_add": ["NET_ADMIN"],
     }
 
-    # Add environment variables if provided
+    environment: dict[str, str] = {}
     if config.environment:
-        container_config["environment"] = config.environment
+        environment.update(config.environment)
         logger.debug(
             f"Added {len(config.environment)} environment variables to container"
         )
+
+    if config.network_subnets:
+        environment[NETWORK_SUBNETS_ENV_VAR] = ",".join(config.network_subnets)
+        logger.debug(
+            f"Passing {len(config.network_subnets)} network subnets to container"
+        )
+
+    if environment:
+        container_config["environment"] = environment
+
+    if config.networks:
+        container_config["network"] = config.networks[0]
+        logger.debug(f"Container will start attached to network '{config.networks[0]}'")
 
     logger.debug(f"Built container config for {config.workspace_name}")
     return container_config
@@ -519,6 +878,7 @@ def launch_container(
         container = client.containers.run(**container_config)
         container_id = container.id
         logger.info(f"Successfully launched container: {container_id}")
+        attach_additional_networks(client, container, config.networks)
         return container_id
     except docker.errors.ContainerError as e:
         logger.error(f"Container execution failed: {e}")

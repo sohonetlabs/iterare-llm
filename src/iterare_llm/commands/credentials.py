@@ -70,7 +70,8 @@ def build_credentials_docker_command(
 
     Uses ``--entrypoint claude`` to bypass the normal entrypoint (which sets up
     firewall and expects a prompt). No ``--cap-add NET_ADMIN`` is needed since
-    the firewall is not configured.
+    the firewall is not configured. The user is expected to log in and then
+    manually exit the Claude Code session.
 
     Parameters
     ----------
@@ -235,9 +236,16 @@ def credentials(
                 image, temp_dir, container_user
             )
 
-            # 7. Display instructions
-            typer.echo("\nStarting Claude Code for authentication...")
-            typer.echo("Log in to Claude, then exit (type /exit or Ctrl+D).\n")
+            # 7. Display instructions and require user acknowledgement before launch
+            typer.echo(
+                "\nClaude Code will launch in interactive mode for authentication."
+            )
+            typer.echo(
+                "IMPORTANT: after logging in you MUST exit the Claude Code session"
+                " manually (type /exit or press Ctrl+D)."
+            )
+            typer.echo("Credentials are only captured if you exit cleanly.")
+            input("\nPress Enter to continue...")
 
             # 8. Run interactive container
             logger.info(f"Running: {' '.join(docker_cmd)}")

@@ -4,9 +4,6 @@ image = "iterare-llm:latest"
 [session]
 shell = "/bin/bash"
 
-[claude]
-credentials_path = "~/.iterare"
-
 [firewall]
 allowed_domains = [
     # Add custom domains here, e.g.:

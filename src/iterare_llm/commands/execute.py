@@ -18,9 +18,12 @@ from iterare_llm.config import (
     validate_credentials,
 )
 from iterare_llm.docker import (
+    get_docker_network_subnets,
+    docker_network_autocomplete,
     get_docker_client,
     generate_container_name,
     launch_container,
+    get_docker_networks,
     ExecutionConfig,
 )
 from iterare_llm.exceptions import (
@@ -28,6 +31,7 @@ from iterare_llm.exceptions import (
     ImageNotFoundError,
     ContainerAlreadyRunningError,
     CredentialsNotFoundError,
+    NetworkNotFoundError,
 )
 from iterare_llm.git import (
     is_git_repository,
@@ -42,7 +46,6 @@ from iterare_llm.prompt import (
     parse_prompt_file,
     get_workspace_name_from_prompt,
     list_prompts,
-    Prompt,
 )
 from iterare_llm.run import generate_run_name, register_run
 from iterare_llm.workspace import prepare_workspace
@@ -131,6 +134,24 @@ def execute(
         "--env",
         "-e",
         help="Environment variable to pass through (can be used multiple times)",
+    ),
+    docker_network: Optional[list[str]] = typer.Option(
+        None,
+        "--docker-network",
+        "--dn",
+        help=(
+            "Docker network to attach the container to (can be used multiple times)."
+        ),
+        autocompletion=docker_network_autocomplete,
+    ),
+    docker_compose: bool = typer.Option(
+        False,
+        "--docker-compose",
+        "--dc",
+        help=(
+            "Also attach the docker-compose default network detected from a "
+            "compose file in the project directory."
+        ),
     ),
 ) -> None:
     """
@@ -234,7 +255,13 @@ def execute(
             logger.info(f"Resolving {len(env)} environment variables from host")
             environment_vars = resolve_environment_variables(env)
 
-        # 11. Build execution config
+        # 11. Resolve Docker networks (explicit list and/or compose default)
+        docker_networks = get_docker_networks(
+            docker_client, docker_network, docker_compose, repo_path
+        )
+        docker_subnets = get_docker_network_subnets(docker_client, docker_networks)
+
+        # 12. Build execution config
         credentials_path = get_claude_credentials_path(config)
         claude_config_file = credentials_path / ".claude.json"
         exec_config = ExecutionConfig(
@@ -246,6 +273,8 @@ def execute(
             prompt_content=prompt_obj.content,
             allowed_domains=config.firewall.allowed_domains,
             environment=environment_vars,
+            networks=docker_networks,
+            network_subnets=docker_subnets,
         )
 
         # 12. Launch Docker container
@@ -282,6 +311,14 @@ def execute(
         typer.echo(f"Error: {e}", err=True)
         typer.echo(
             "\nPlease ensure Claude Code is configured with valid credentials.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    except NetworkNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        typer.echo(
+            "\nList available networks with: docker network ls",
             err=True,
         )
         raise typer.Exit(1)

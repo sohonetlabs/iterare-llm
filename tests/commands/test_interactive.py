@@ -1,6 +1,5 @@
 """Tests for interactive command."""
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -11,6 +10,7 @@ from iterare_llm.exceptions import (
     ContainerAlreadyRunningError,
     ImageNotFoundError,
     IterareError,
+    NetworkNotFoundError,
 )
 from iterare_llm.main import app
 
@@ -148,6 +148,45 @@ class TestBuildDockerRunCommand:
             "iterare-llm:latest",
         ]
 
+    def test_with_networks_and_subnets(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+            networks=["net-a", "net-b"],
+            network_subnets=["10.0.0.0/24", "172.18.0.0/16"],
+        )
+
+        assert "--network" in result
+        assert result.count("--network") == 2
+        # Network flags must precede the image argument and follow env flags
+        idx_first_network = result.index("--network")
+        assert result[idx_first_network + 1] == "net-a"
+        assert result[idx_first_network + 3] == "net-b"
+        assert "ITERARE_NETWORK_SUBNETS=10.0.0.0/24,172.18.0.0/16" in result
+
+    def test_no_networks_no_flags(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+            networks=[],
+            network_subnets=[],
+        )
+
+        assert "--network" not in result
+        assert not any("ITERARE_NETWORK_SUBNETS" in arg for arg in result)
+
 
 class TestInteractiveCommand:
     @pytest.fixture(autouse=True)
@@ -222,6 +261,14 @@ class TestInteractiveCommand:
             patch(
                 "iterare_llm.commands.interactive.resolve_environment_variables",
                 return_value={},
+            ),
+            patch(
+                "iterare_llm.commands.interactive.get_docker_networks",
+                return_value=[],
+            ),
+            patch(
+                "iterare_llm.commands.interactive.get_docker_network_subnets",
+                return_value=[],
             ),
             patch("iterare_llm.commands.interactive.register_run"),
             patch(
@@ -333,3 +380,69 @@ class TestInteractiveCommand:
         result = runner.invoke(app, ["interactive"])
 
         assert result.exit_code == 130
+
+    def test_with_docker_network(self):
+        self.mocks["get_docker_networks"].return_value = ["my-net"]
+        self.mocks["get_docker_network_subnets"].return_value = ["10.0.0.0/24"]
+
+        result = runner.invoke(app, ["interactive", "--docker-network", "my-net"])
+
+        assert result.exit_code == 0
+        call_args = self.mocks["get_docker_networks"].call_args.args
+        assert call_args[1] == ["my-net"]
+        assert call_args[2] is False
+        kwargs = self.mocks["build_docker_run_command"].call_args.kwargs
+        assert kwargs["networks"] == ["my-net"]
+        assert kwargs["network_subnets"] == ["10.0.0.0/24"]
+
+    def test_with_docker_network_short_alias(self):
+        self.mocks["get_docker_networks"].return_value = ["alias-net"]
+        self.mocks["get_docker_network_subnets"].return_value = []
+
+        result = runner.invoke(app, ["interactive", "--dn", "alias-net"])
+
+        assert result.exit_code == 0
+
+    def test_with_docker_compose_flag(self):
+        self.mocks["get_docker_networks"].return_value = ["myproj_default"]
+        self.mocks["get_docker_network_subnets"].return_value = []
+
+        result = runner.invoke(app, ["interactive", "--docker-compose"])
+
+        assert result.exit_code == 0
+        call_args = self.mocks["get_docker_networks"].call_args.args
+        assert call_args[1] is None
+        assert call_args[2] is True
+
+    def test_with_docker_compose_short_alias(self):
+        self.mocks["get_docker_networks"].return_value = ["myproj_default"]
+        self.mocks["get_docker_network_subnets"].return_value = []
+
+        result = runner.invoke(app, ["interactive", "--dc"])
+
+        assert result.exit_code == 0
+        assert self.mocks["get_docker_networks"].call_args.args[2] is True
+
+    def test_with_dn_and_dc_combined(self):
+        self.mocks["get_docker_networks"].return_value = [
+            "my-net",
+            "myproj_default",
+        ]
+        self.mocks["get_docker_network_subnets"].return_value = []
+
+        result = runner.invoke(app, ["interactive", "--dn", "my-net", "--dc"])
+
+        assert result.exit_code == 0
+        call_args = self.mocks["get_docker_networks"].call_args.args
+        assert call_args[1] == ["my-net"]
+        assert call_args[2] is True
+
+    def test_network_not_found(self):
+        self.mocks["get_docker_networks"].side_effect = NetworkNotFoundError(
+            "Docker network 'gone' does not exist."
+        )
+
+        result = runner.invoke(app, ["interactive", "--dn", "gone"])
+
+        assert result.exit_code == 1
+        assert "docker network ls" in result.output

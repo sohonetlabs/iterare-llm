@@ -1,7 +1,6 @@
 """Shared test fixtures for iterare-llm."""
 
 import subprocess
-from pathlib import Path
 from textwrap import dedent
 from unittest.mock import MagicMock, patch
 
@@ -168,7 +167,7 @@ class FakeGit:
             branch_name = cmd[-1]
             if branch_name not in self.branches:
                 raise subprocess.CalledProcessError(
-                    128, cmd, stderr=f"fatal: Needed a single revision"
+                    128, cmd, stderr="fatal: Needed a single revision"
                 )
             result.stdout = "abc123\n"
         elif "worktree" in cmd and "list" in cmd:

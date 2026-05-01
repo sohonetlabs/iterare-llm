@@ -150,6 +150,28 @@ echo "Host network detected as: $HOST_NETWORK"
 iptables -A INPUT -s "$HOST_NETWORK" -j ACCEPT
 iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
 
+# Allow traffic to/from peer containers on attached docker networks.
+# ITERARE_NETWORK_SUBNETS is supplied by the iterare CLI and contains a comma
+# separated list of CIDRs corresponding to the docker networks the container
+# was attached to.
+if [ -n "${ITERARE_NETWORK_SUBNETS:-}" ]; then
+    IFS=',' read -ra ITERARE_SUBNETS <<< "$ITERARE_NETWORK_SUBNETS"
+    for subnet in "${ITERARE_SUBNETS[@]}"; do
+        # Strip any surrounding whitespace
+        subnet="${subnet// /}"
+        if [ -z "$subnet" ]; then
+            continue
+        fi
+        if [[ ! "$subnet" =~ ^[0-9a-fA-F:.]+/[0-9]+$ ]]; then
+            echo "ERROR: Invalid docker network subnet: $subnet"
+            exit 1
+        fi
+        echo "Allowing docker network subnet: $subnet"
+        iptables -A INPUT -s "$subnet" -j ACCEPT
+        iptables -A OUTPUT -d "$subnet" -j ACCEPT
+    done
+fi
+
 # Set default policies to DROP first
 iptables -P INPUT DROP
 iptables -P FORWARD DROP

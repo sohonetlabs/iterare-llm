@@ -15,7 +15,6 @@ from iterare_llm.docker import (
 )
 from iterare_llm.exceptions import (
     ContainerAlreadyRunningError,
-    ImageNotFoundError,
 )
 from iterare_llm.git import remove_worktree
 from iterare_llm.logging import get_logger
