@@ -3,6 +3,7 @@
 import docker.errors
 import pytest
 
+from textwrap import dedent
 from unittest.mock import MagicMock, call, ANY
 
 from pathlib import Path
@@ -30,6 +31,7 @@ from iterare_llm.docker import (
     list_docker_networks,
     network_exists,
     get_docker_networks,
+    read_dotenv_compose_project_name,
 )
 from iterare_llm.exceptions import (
     ContainerAlreadyRunningError,
@@ -577,9 +579,49 @@ class TestLoadComposeFile:
         assert load_compose_file(compose_file) == {}
 
 
+class TestReadDotenvComposeProjectName:
+    def test_no_env_file_returns_none(self, tmp_path):
+        assert read_dotenv_compose_project_name(tmp_path) is None
+
+    def test_reads_value(self, tmp_path):
+        (tmp_path / ".env").write_text("COMPOSE_PROJECT_NAME=clearview2\n")
+
+        assert read_dotenv_compose_project_name(tmp_path) == "clearview2"
+
+    def test_strips_quotes_and_whitespace(self, tmp_path):
+        (tmp_path / ".env").write_text('COMPOSE_PROJECT_NAME = "My App!"\n')
+
+        assert read_dotenv_compose_project_name(tmp_path) == "myapp"
+
+    def test_ignores_comments_and_blank_lines(self, tmp_path):
+        (tmp_path / ".env").write_text(
+            dedent(
+                """\
+                # comment
+
+                FOO=bar
+                COMPOSE_PROJECT_NAME=alpha
+                """
+            )
+        )
+
+        assert read_dotenv_compose_project_name(tmp_path) == "alpha"
+
+    def test_missing_key_returns_none(self, tmp_path):
+        (tmp_path / ".env").write_text("FOO=bar\n")
+
+        assert read_dotenv_compose_project_name(tmp_path) is None
+
+    def test_blank_value_returns_none(self, tmp_path):
+        (tmp_path / ".env").write_text("COMPOSE_PROJECT_NAME=\n")
+
+        assert read_dotenv_compose_project_name(tmp_path) is None
+
+
 class TestDetectComposeNetwork:
     @pytest.fixture(autouse=True)
-    def setup_project(self, tmp_path):
+    def setup_project(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("COMPOSE_PROJECT_NAME", raising=False)
         self.tmp_path = tmp_path
         self.project = tmp_path / "myproj"
         self.project.mkdir()
@@ -598,7 +640,14 @@ class TestDetectComposeNetwork:
         assert detect_compose_network(custom) == "myapp_default"
 
     def test_uses_explicit_name_field(self):
-        self.write_compose("name: explicit-name\nservices: {}\n")
+        self.write_compose(
+            dedent(
+                """\
+                name: explicit-name
+                services: {}
+                """
+            )
+        )
 
         assert detect_compose_network(self.project) == "explicit-name_default"
 
@@ -613,7 +662,14 @@ class TestDetectComposeNetwork:
         assert detect_compose_network(self.project) == "myproj_default"
 
     def test_non_dict_yaml_root(self):
-        self.write_compose("- entry1\n- entry2\n")
+        self.write_compose(
+            dedent(
+                """\
+                - entry1
+                - entry2
+                """
+            )
+        )
 
         assert detect_compose_network(self.project) == "myproj_default"
 
@@ -623,7 +679,14 @@ class TestDetectComposeNetwork:
         assert detect_compose_network(self.project) == "myapp_default"
 
     def test_explicit_name_blank_falls_back(self):
-        self.write_compose("name: '   '\nservices: {}\n")
+        self.write_compose(
+            dedent(
+                """\
+                name: '   '
+                services: {}
+                """
+            )
+        )
 
         assert detect_compose_network(self.project) == "myproj_default"
 
@@ -633,6 +696,58 @@ class TestDetectComposeNetwork:
         (custom / "docker-compose.yml").write_text("services: {}\n")
 
         assert detect_compose_network(custom) is None
+
+    def test_dotenv_overrides_directory_name(self):
+        self.write_compose("services: {}\n")
+        (self.project / ".env").write_text("COMPOSE_PROJECT_NAME=clearview2\n")
+
+        assert detect_compose_network(self.project) == "clearview2_default"
+
+    def test_dotenv_overrides_compose_name_field(self):
+        self.write_compose(
+            dedent(
+                """\
+                name: from-file
+                services: {}
+                """
+            )
+        )
+        (self.project / ".env").write_text("COMPOSE_PROJECT_NAME=from-dotenv\n")
+
+        assert detect_compose_network(self.project) == "from-dotenv_default"
+
+    def test_env_var_overrides_dotenv(self, monkeypatch):
+        self.write_compose(
+            dedent(
+                """\
+                name: from-file
+                services: {}
+                """
+            )
+        )
+        (self.project / ".env").write_text("COMPOSE_PROJECT_NAME=from-dotenv\n")
+        monkeypatch.setenv("COMPOSE_PROJECT_NAME", "from-shell")
+
+        assert detect_compose_network(self.project) == "from-shell_default"
+
+    def test_env_var_sanitized(self, monkeypatch):
+        self.write_compose("services: {}\n")
+        monkeypatch.setenv("COMPOSE_PROJECT_NAME", "My App!")
+
+        assert detect_compose_network(self.project) == "myapp_default"
+
+    def test_blank_env_var_falls_through(self, monkeypatch):
+        self.write_compose(
+            dedent(
+                """\
+                name: from-file
+                services: {}
+                """
+            )
+        )
+        monkeypatch.setenv("COMPOSE_PROJECT_NAME", "   ")
+
+        assert detect_compose_network(self.project) == "from-file_default"
 
 
 class TestGetDockerNetworks:

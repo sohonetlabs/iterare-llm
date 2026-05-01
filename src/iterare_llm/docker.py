@@ -1,5 +1,6 @@
 """Docker container management for iterare."""
 
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -481,15 +482,40 @@ def read_compose_project_name(compose_file: Path) -> str | None:
     return sanitize_compose_project_name(name)
 
 
+def read_dotenv_compose_project_name(project_dir: Path) -> str | None:
+    """Read ``COMPOSE_PROJECT_NAME`` from a ``.env`` file in *project_dir*."""
+    env_file = project_dir / ".env"
+    if not env_file.is_file():
+        return None
+    try:
+        lines = env_file.read_text().splitlines()
+    except OSError as e:
+        logger.debug(f"Could not read .env file '{env_file}': {e}")
+        return None
+
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, sep, value = line.partition("=")
+        if sep and key.strip() == "COMPOSE_PROJECT_NAME":
+            value = value.strip().strip("'").strip('"')
+            return sanitize_compose_project_name(value) if value else None
+    return None
+
+
 def detect_compose_network(project_dir: Path) -> str | None:
     """
     Detect the default network name a docker-compose.yml in *project_dir* would create.
 
-    Looks for ``docker-compose.yml`` or ``compose.yml`` in *project_dir*. If
+    Looks for ``docker-compose.yml`` or ``compose.yml`` in *project_dir``. If
     found, the returned name follows Docker Compose conventions:
-    ``<project>_default`` where ``project`` is taken from the compose file's
-    top-level ``name:`` field, falling back to a sanitized form of the
-    directory name.
+    ``<project>_default``. Project name precedence matches Docker Compose:
+
+    1. ``COMPOSE_PROJECT_NAME`` from the process environment
+    2. ``COMPOSE_PROJECT_NAME`` from the project's ``.env`` file
+    3. Top-level ``name:`` field in the compose file
+    4. Sanitized basename of *project_dir*
 
     Parameters
     ----------
@@ -511,14 +537,16 @@ def detect_compose_network(project_dir: Path) -> str | None:
     if not compose_file:
         return None
 
-    project_name = read_compose_project_name(compose_file)
+    env_value = os.environ.get("COMPOSE_PROJECT_NAME", "").strip()
+    project_name = (
+        (sanitize_compose_project_name(env_value) if env_value else None)
+        or read_dotenv_compose_project_name(project_dir)
+        or read_compose_project_name(compose_file)
+        or sanitize_compose_project_name(project_dir.name)
+    )
     if not project_name:
-        # Project name fallback
-        if not (project_name := sanitize_compose_project_name(project_dir.name)):
-            logger.debug(
-                f"Could not derive a compose project name from '{project_dir}'"
-            )
-            return None
+        logger.debug(f"Could not derive a compose project name from '{project_dir}'")
+        return None
 
     network_name = f"{project_name}_default"
     logger.debug(f"Detected compose default network: {network_name}")
