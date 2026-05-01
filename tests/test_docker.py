@@ -3,28 +3,39 @@
 import docker.errors
 import pytest
 
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock, call, ANY
 
 from pathlib import Path
 from unittest.mock import patch
 
 from iterare_llm.docker import (
+    NETWORK_SUBNETS_ENV_VAR,
+    attach_additional_networks,
     build_container_config,
     build_volume_mounts,
+    get_docker_network_subnets,
     container_running,
+    detect_compose_network,
+    docker_network_autocomplete,
+    load_compose_file,
     ensure_image,
     find_container_by_name,
     generate_container_name,
     generate_domains_file,
     get_docker_client,
     get_image_user,
+    get_network_subnets,
     image_exists,
     launch_container,
+    list_docker_networks,
+    network_exists,
+    get_docker_networks,
 )
 from iterare_llm.exceptions import (
     ContainerAlreadyRunningError,
     DockerError,
     ImageNotFoundError,
+    NetworkNotFoundError,
 )
 
 
@@ -303,6 +314,39 @@ class TestBuildContainerConfig:
 
         assert result["environment"] == {"PIP_INDEX_URL": "https://pypi.internal"}
 
+    def test_with_network_subnets(self, sample_execution_config):
+        sample_execution_config.network_subnets = ["10.0.0.0/24", "172.18.0.0/16"]
+
+        result = build_container_config(
+            sample_execution_config, "node", self.domains_file, self.log_file
+        )
+
+        assert result["environment"] == {
+            NETWORK_SUBNETS_ENV_VAR: "10.0.0.0/24,172.18.0.0/16"
+        }
+
+    def test_with_environment_and_subnets(self, sample_execution_config):
+        sample_execution_config.environment = {"FOO": "bar"}
+        sample_execution_config.network_subnets = ["10.0.0.0/24"]
+
+        result = build_container_config(
+            sample_execution_config, "node", self.domains_file, self.log_file
+        )
+
+        assert result["environment"] == {
+            "FOO": "bar",
+            NETWORK_SUBNETS_ENV_VAR: "10.0.0.0/24",
+        }
+
+    def test_with_networks(self, sample_execution_config):
+        sample_execution_config.networks = ["my-net", "other-net"]
+
+        result = build_container_config(
+            sample_execution_config, "node", self.domains_file, self.log_file
+        )
+
+        assert result["network"] == "my-net"
+
 
 class TestLaunchContainer:
     @pytest.fixture(autouse=True)
@@ -387,3 +431,311 @@ class TestLaunchContainer:
 
         with pytest.raises(DockerError, match="Failed to launch container"):
             launch_container(ready_client, sample_execution_config, "run-abc123")
+
+    def test_attaches_additional_networks(self, ready_client, sample_execution_config):
+        sample_execution_config.networks = ["primary", "extra-1", "extra-2"]
+
+        launch_container(ready_client, sample_execution_config, "run-abc123")
+
+        assert ready_client.networks.get.return_value.connect.call_args_list == [
+            call(ANY),
+            call(ANY),
+        ]
+
+
+class TestNetworkExists:
+    def test_found(self, mock_docker_client):
+        mock_docker_client.networks.get.return_value = MagicMock()
+
+        assert network_exists(mock_docker_client, "my-net") is True
+
+    def test_not_found(self, mock_docker_client):
+        mock_docker_client.networks.get.side_effect = docker.errors.NotFound("nope")
+
+        assert network_exists(mock_docker_client, "missing") is False
+
+    def test_docker_error(self, mock_docker_client):
+        mock_docker_client.networks.get.side_effect = docker.errors.DockerException(
+            "boom"
+        )
+
+        with pytest.raises(DockerError, match="Error inspecting docker network"):
+            network_exists(mock_docker_client, "broken")
+
+
+class TestGetNetworkSubnets:
+    def test_returns_subnets(self, mock_docker_client):
+        network = MagicMock()
+        network.attrs = {
+            "IPAM": {
+                "Config": [
+                    {"Subnet": "172.18.0.0/16"},
+                    {"Subnet": "10.0.0.0/24"},
+                ]
+            }
+        }
+        mock_docker_client.networks.get.return_value = network
+
+        result = get_network_subnets(mock_docker_client, "my-net")
+
+        assert result == ["172.18.0.0/16", "10.0.0.0/24"]
+
+    def test_no_ipam(self, mock_docker_client):
+        network = MagicMock()
+        network.attrs = {}
+        mock_docker_client.networks.get.return_value = network
+
+        assert get_network_subnets(mock_docker_client, "my-net") == []
+
+    def test_ipam_without_config(self, mock_docker_client):
+        network = MagicMock()
+        network.attrs = {"IPAM": {"Config": None}}
+        mock_docker_client.networks.get.return_value = network
+
+        assert get_network_subnets(mock_docker_client, "my-net") == []
+
+    def test_skips_entries_without_subnet(self, mock_docker_client):
+        network = MagicMock()
+        network.attrs = {"IPAM": {"Config": [{"Gateway": "10.0.0.1"}]}}
+        mock_docker_client.networks.get.return_value = network
+
+        assert get_network_subnets(mock_docker_client, "my-net") == []
+
+    def test_not_found(self, mock_docker_client):
+        mock_docker_client.networks.get.side_effect = docker.errors.NotFound("nope")
+
+        with pytest.raises(NetworkNotFoundError):
+            get_network_subnets(mock_docker_client, "missing")
+
+    def test_docker_error(self, mock_docker_client):
+        mock_docker_client.networks.get.side_effect = docker.errors.DockerException(
+            "boom"
+        )
+
+        with pytest.raises(DockerError, match="Error inspecting docker network"):
+            get_network_subnets(mock_docker_client, "broken")
+
+
+class TestListDockerNetworks:
+    def test_returns_names(self, mock_docker_client):
+        net1 = MagicMock()
+        net1.name = "bridge"
+        net2 = MagicMock()
+        net2.name = "my-app_default"
+        mock_docker_client.networks.list.return_value = [net1, net2]
+
+        assert list_docker_networks() == ["bridge", "my-app_default"]
+
+    def test_swallows_errors(self):
+        with patch(
+            "iterare_llm.docker.get_docker_client",
+            side_effect=DockerError("not running"),
+        ):
+            assert list_docker_networks() == []
+
+
+class TestDockerNetworkAutocomplete:
+    @patch("iterare_llm.docker.list_docker_networks")
+    def test_filters_by_prefix(self, mock_list):
+        mock_list.return_value = ["alpha", "alpha-2", "beta"]
+
+        assert docker_network_autocomplete("alpha") == ["alpha", "alpha-2"]
+
+    @patch("iterare_llm.docker.list_docker_networks")
+    def test_no_filter_returns_all(self, mock_list):
+        mock_list.return_value = ["alpha", "beta"]
+
+        assert docker_network_autocomplete("") == ["alpha", "beta"]
+
+
+class TestLoadComposeFile:
+    def test_returns_parsed_dict(self, tmp_path):
+        compose_file = tmp_path / "compose.yml"
+        compose_file.write_text("name: foo\nservices:\n  web: {}\n")
+
+        assert load_compose_file(compose_file) == {
+            "name": "foo",
+            "services": {"web": {}},
+        }
+
+    def test_oserror_returns_empty_dict(self):
+        compose_file = MagicMock(spec=Path)
+        compose_file.read_text.side_effect = OSError("permission denied")
+
+        assert load_compose_file(compose_file) == {}
+
+    def test_yaml_error_returns_empty_dict(self):
+        compose_file = MagicMock(spec=Path)
+        compose_file.read_text.return_value = "not: valid: yaml:::"
+
+        assert load_compose_file(compose_file) == {}
+
+    def test_non_dict_root_returns_empty_dict(self):
+        compose_file = MagicMock(spec=Path)
+        compose_file.read_text.return_value = "- one\n- two\n"
+
+        assert load_compose_file(compose_file) == {}
+
+
+class TestDetectComposeNetwork:
+    @pytest.fixture(autouse=True)
+    def setup_project(self, tmp_path):
+        self.tmp_path = tmp_path
+        self.project = tmp_path / "myproj"
+        self.project.mkdir()
+
+    def write_compose(
+        self, content: str, filename: str = "docker-compose.yml"
+    ) -> None:
+        (self.project / filename).write_text(content)
+
+    def test_no_compose_file(self):
+        assert detect_compose_network(self.project) is None
+
+    def test_default_name_from_directory(self):
+        custom = self.tmp_path / "MyApp"
+        custom.mkdir()
+        (custom / "docker-compose.yml").write_text("services: {}\n")
+
+        assert detect_compose_network(custom) == "myapp_default"
+
+    def test_uses_explicit_name_field(self):
+        self.write_compose("name: explicit-name\nservices: {}\n")
+
+        assert detect_compose_network(self.project) == "explicit-name_default"
+
+    def test_compose_yaml_extension(self):
+        self.write_compose("services: {}\n", filename="compose.yaml")
+
+        assert detect_compose_network(self.project) == "myproj_default"
+
+    def test_invalid_yaml_falls_back_to_directory_name(self):
+        self.write_compose("not: valid: yaml:::\n")
+
+        assert detect_compose_network(self.project) == "myproj_default"
+
+    def test_non_dict_yaml_root(self):
+        self.write_compose("- entry1\n- entry2\n")
+
+        assert detect_compose_network(self.project) == "myproj_default"
+
+    def test_explicit_name_with_uppercase_and_specials(self):
+        self.write_compose("name: 'My App!'\n")
+
+        assert detect_compose_network(self.project) == "myapp_default"
+
+    def test_explicit_name_blank_falls_back(self):
+        self.write_compose("name: '   '\nservices: {}\n")
+
+        assert detect_compose_network(self.project) == "myproj_default"
+
+    def test_empty_directory_name_returns_none(self):
+        custom = self.tmp_path / "___"
+        custom.mkdir()
+        (custom / "docker-compose.yml").write_text("services: {}\n")
+
+        assert detect_compose_network(custom) is None
+
+
+class TestGetDockerNetworks:
+    def test_no_networks_no_compose(self, mock_docker_client, tmp_path):
+        result = get_docker_networks(mock_docker_client, None, tmp_path)
+
+        assert result == []
+
+    def test_explicit_networks_validated(self, mock_docker_client, tmp_path):
+        mock_docker_client.networks.get.return_value = MagicMock()
+
+        result = get_docker_networks(mock_docker_client, ["net-a", "net-b"], tmp_path)
+
+        assert result == ["net-a", "net-b"]
+
+    def test_explicit_networks_deduplicated(self, mock_docker_client, tmp_path):
+        mock_docker_client.networks.get.return_value = MagicMock()
+
+        result = get_docker_networks(
+            mock_docker_client, ["net-a", "net-a", "net-b"], tmp_path
+        )
+
+        assert result == ["net-a", "net-b"]
+
+    def test_explicit_network_missing_raises(self, mock_docker_client, tmp_path):
+        mock_docker_client.networks.get.side_effect = docker.errors.NotFound("nope")
+
+        with pytest.raises(NetworkNotFoundError, match="missing"):
+            get_docker_networks(mock_docker_client, ["missing"], tmp_path)
+
+    def test_compose_default_picked_up(self, mock_docker_client, tmp_path):
+        project = tmp_path / "myproj"
+        project.mkdir()
+        (project / "docker-compose.yml").write_text("services: {}\n")
+        mock_docker_client.networks.get.return_value = MagicMock()
+
+        result = get_docker_networks(mock_docker_client, None, project)
+
+        assert result == ["myproj_default"]
+
+    def test_compose_default_inactive_skipped(self, mock_docker_client, tmp_path):
+        project = tmp_path / "myproj"
+        project.mkdir()
+        (project / "docker-compose.yml").write_text("services: {}\n")
+        mock_docker_client.networks.get.side_effect = docker.errors.NotFound("nope")
+
+        result = get_docker_networks(mock_docker_client, None, project)
+
+        assert result == []
+
+
+class TestGetDockerNetworkSubnets:
+    def test_aggregates_and_deduplicates(self, mock_docker_client):
+        net_a = MagicMock()
+        net_a.attrs = {"IPAM": {"Config": [{"Subnet": "10.0.0.0/24"}]}}
+        net_b = MagicMock()
+        net_b.attrs = {
+            "IPAM": {
+                "Config": [
+                    {"Subnet": "10.0.0.0/24"},
+                    {"Subnet": "172.18.0.0/16"},
+                ]
+            }
+        }
+        mock_docker_client.networks.get.side_effect = [net_a, net_b]
+
+        result = get_docker_network_subnets(mock_docker_client, ["a", "b"])
+
+        assert result == ["10.0.0.0/24", "172.18.0.0/16"]
+
+    def test_empty_input(self, mock_docker_client):
+        assert get_docker_network_subnets(mock_docker_client, []) == []
+
+
+class TestAttachAdditionalNetworks:
+    def test_noop_when_empty(self, mock_docker_client):
+        attach_additional_networks(mock_docker_client, MagicMock(), [])
+
+        assert not mock_docker_client.networks.get.called
+
+    def test_noop_when_single_network(self, mock_docker_client):
+        attach_additional_networks(mock_docker_client, MagicMock(), ["only"])
+
+        assert not mock_docker_client.networks.get.called
+
+    def test_connects_extras(self, mock_docker_client):
+        net = MagicMock()
+        mock_docker_client.networks.get.return_value = net
+        container = MagicMock()
+
+        attach_additional_networks(mock_docker_client, container, ["primary", "extra"])
+
+        mock_docker_client.networks.get.assert_called_once_with("extra")
+        net.connect.assert_called_once_with(container)
+
+    def test_connect_failure_wrapped(self, mock_docker_client):
+        net = MagicMock()
+        net.connect.side_effect = docker.errors.DockerException("boom")
+        mock_docker_client.networks.get.return_value = net
+
+        with pytest.raises(DockerError, match="Failed to connect"):
+            attach_additional_networks(
+                mock_docker_client, MagicMock(), ["primary", "extra"]
+            )

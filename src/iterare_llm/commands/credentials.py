@@ -237,7 +237,9 @@ def credentials(
             )
 
             # 7. Display instructions and require user acknowledgement before launch
-            typer.echo("\nClaude Code will launch in interactive mode for authentication.")
+            typer.echo(
+                "\nClaude Code will launch in interactive mode for authentication."
+            )
             typer.echo(
                 "IMPORTANT: after logging in you MUST exit the Claude Code session"
                 " manually (type /exit or press Ctrl+D)."

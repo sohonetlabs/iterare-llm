@@ -18,15 +18,20 @@ from iterare_llm.config import (
     validate_credentials,
 )
 from iterare_llm.docker import (
+    NETWORK_SUBNETS_ENV_VAR,
+    get_docker_network_subnets,
+    docker_network_autocomplete,
     get_docker_client,
     generate_container_name,
     get_image_user,
     generate_domains_file,
+    get_docker_networks,
 )
 from iterare_llm.exceptions import (
     IterareError,
     ImageNotFoundError,
     ContainerAlreadyRunningError,
+    NetworkNotFoundError,
 )
 from iterare_llm.git import (
     is_git_repository,
@@ -52,6 +57,8 @@ def build_docker_run_command(
     log_file: Path,
     container_user: str,
     environment: dict[str, str] | None = None,
+    networks: list[str] | None = None,
+    network_subnets: list[str] | None = None,
 ) -> list[str]:
     """
     Build docker run command for interactive session.
@@ -76,6 +83,13 @@ def build_docker_run_command(
         User the container runs as
     environment : dict[str, str] | None
         Environment variables to pass to the container
+    networks : list[str] | None
+        Docker networks to attach the container to (one ``--network`` flag per
+        entry). When empty or ``None`` no network flags are emitted.
+    network_subnets : list[str] | None
+        Subnet CIDRs of the attached networks. Forwarded to the container via
+        ``ITERARE_NETWORK_SUBNETS`` so the firewall can whitelist
+        peer-container traffic.
 
     Returns
     -------
@@ -110,6 +124,15 @@ def build_docker_run_command(
         for key, value in environment.items():
             cmd.extend(["-e", f"{key}={value}"])
             logger.debug(f"Added environment variable: {key}")
+
+    if network_subnets:
+        cmd.extend(["-e", f"{NETWORK_SUBNETS_ENV_VAR}={','.join(network_subnets)}"])
+        logger.debug(f"Passing {len(network_subnets)} network subnets to container")
+
+    if networks:
+        for net in networks:
+            cmd.extend(["--network", net])
+            logger.debug(f"Attaching container to network: {net}")
 
     cmd.extend(
         [
@@ -166,6 +189,17 @@ def interactive(
         "--env",
         "-e",
         help="Environment variable to pass through (can be used multiple times)",
+    ),
+    docker_network: Optional[list[str]] = typer.Option(
+        None,
+        "--docker-network",
+        "--dn",
+        help=(
+            "Docker network to attach the container to (can be used multiple "
+            "times). Defaults to the docker-compose default network if a "
+            "compose file is present."
+        ),
+        autocompletion=docker_network_autocomplete,
     ),
 ) -> None:
     """
@@ -283,7 +317,11 @@ def interactive(
             logger.info(f"Resolving {len(env)} environment variables from host")
             environment_vars = resolve_environment_variables(env)
 
-        # 10. Build docker run command
+        # 10. Resolve Docker networks (explicit list or compose default)
+        docker_networks = get_docker_networks(docker_client, docker_network, repo_path)
+        network_subnets = get_docker_network_subnets(docker_client, docker_networks)
+
+        # 11. Build docker run command
         container_name = generate_container_name(run_name)
         docker_cmd = build_docker_run_command(
             image_name=config.docker.image,
@@ -295,6 +333,8 @@ def interactive(
             log_file=log_file,
             container_user=container_user,
             environment=environment_vars,
+            networks=docker_networks,
+            network_subnets=network_subnets,
         )
 
         # 11. Register run (if created new worktree)
@@ -335,6 +375,14 @@ def interactive(
         typer.echo(f"Error: {e}", err=True)
         typer.echo(
             "\nTo stop the container, use: docker stop <container-name>",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    except NetworkNotFoundError as e:
+        typer.echo(f"Error: {e}", err=True)
+        typer.echo(
+            "\nList available networks with: docker network ls",
             err=True,
         )
         raise typer.Exit(1)

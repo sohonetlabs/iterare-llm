@@ -55,6 +55,12 @@ class ContainerAlreadyRunningError(DockerError):
     pass
 
 
+class NetworkNotFoundError(DockerError):
+    """Docker network not found."""
+
+    pass
+
+
 # Config exceptions
 class ConfigError(IterareError):
     """Base exception for configuration issues."""

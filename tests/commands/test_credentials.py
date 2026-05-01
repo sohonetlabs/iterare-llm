@@ -2,7 +2,6 @@
 
 import logging
 from contextlib import contextmanager
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -40,7 +39,7 @@ class TestCredentialsTempDir:
         mock_tmp_dir.return_value = tmp_path
 
         with caplog.at_level(logging.WARNING):
-            with credentials_temp_dir() as temp_dir:
+            with credentials_temp_dir():
                 pass
 
         assert "Failed to clean up" in caplog.text
