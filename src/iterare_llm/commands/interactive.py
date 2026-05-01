@@ -195,11 +195,18 @@ def interactive(
         "--docker-network",
         "--dn",
         help=(
-            "Docker network to attach the container to (can be used multiple "
-            "times). Defaults to the docker-compose default network if a "
-            "compose file is present."
+            "Docker network to attach the container to (can be used multiple times)."
         ),
         autocompletion=docker_network_autocomplete,
+    ),
+    docker_compose: bool = typer.Option(
+        False,
+        "--docker-compose",
+        "--dc",
+        help=(
+            "Also attach the docker-compose default network detected from a "
+            "compose file in the project directory."
+        ),
     ),
 ) -> None:
     """
@@ -318,7 +325,9 @@ def interactive(
             environment_vars = resolve_environment_variables(env)
 
         # 10. Resolve Docker networks (explicit list or compose default)
-        docker_networks = get_docker_networks(docker_client, docker_network, repo_path)
+        docker_networks = get_docker_networks(
+            docker_client, docker_network, docker_compose, repo_path
+        )
         network_subnets = get_docker_network_subnets(docker_client, docker_networks)
 
         # 11. Build docker run command

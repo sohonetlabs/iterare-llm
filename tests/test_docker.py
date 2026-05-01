@@ -584,9 +584,7 @@ class TestDetectComposeNetwork:
         self.project = tmp_path / "myproj"
         self.project.mkdir()
 
-    def write_compose(
-        self, content: str, filename: str = "docker-compose.yml"
-    ) -> None:
+    def write_compose(self, content: str, filename: str = "docker-compose.yml") -> None:
         (self.project / filename).write_text(content)
 
     def test_no_compose_file(self):
@@ -639,14 +637,16 @@ class TestDetectComposeNetwork:
 
 class TestGetDockerNetworks:
     def test_no_networks_no_compose(self, mock_docker_client, tmp_path):
-        result = get_docker_networks(mock_docker_client, None, tmp_path)
+        result = get_docker_networks(mock_docker_client, None, False, tmp_path)
 
         assert result == []
 
     def test_explicit_networks_validated(self, mock_docker_client, tmp_path):
         mock_docker_client.networks.get.return_value = MagicMock()
 
-        result = get_docker_networks(mock_docker_client, ["net-a", "net-b"], tmp_path)
+        result = get_docker_networks(
+            mock_docker_client, ["net-a", "net-b"], False, tmp_path
+        )
 
         assert result == ["net-a", "net-b"]
 
@@ -654,7 +654,7 @@ class TestGetDockerNetworks:
         mock_docker_client.networks.get.return_value = MagicMock()
 
         result = get_docker_networks(
-            mock_docker_client, ["net-a", "net-a", "net-b"], tmp_path
+            mock_docker_client, ["net-a", "net-a", "net-b"], False, tmp_path
         )
 
         assert result == ["net-a", "net-b"]
@@ -663,27 +663,68 @@ class TestGetDockerNetworks:
         mock_docker_client.networks.get.side_effect = docker.errors.NotFound("nope")
 
         with pytest.raises(NetworkNotFoundError, match="missing"):
-            get_docker_networks(mock_docker_client, ["missing"], tmp_path)
+            get_docker_networks(mock_docker_client, ["missing"], False, tmp_path)
 
-    def test_compose_default_picked_up(self, mock_docker_client, tmp_path):
+    def test_compose_picked_up_only_when_requested(self, mock_docker_client, tmp_path):
         project = tmp_path / "myproj"
         project.mkdir()
         (project / "docker-compose.yml").write_text("services: {}\n")
         mock_docker_client.networks.get.return_value = MagicMock()
 
-        result = get_docker_networks(mock_docker_client, None, project)
+        result = get_docker_networks(mock_docker_client, None, True, project)
 
         assert result == ["myproj_default"]
 
-    def test_compose_default_inactive_skipped(self, mock_docker_client, tmp_path):
+    def test_compose_not_consulted_by_default(self, mock_docker_client, tmp_path):
+        project = tmp_path / "myproj"
+        project.mkdir()
+        (project / "docker-compose.yml").write_text("services: {}\n")
+
+        result = get_docker_networks(mock_docker_client, None, False, project)
+
+        assert result == []
+        # Confirm we didn't even ask Docker about the compose network.
+        assert not mock_docker_client.networks.get.called
+
+    def test_compose_inactive_skipped(self, mock_docker_client, tmp_path):
         project = tmp_path / "myproj"
         project.mkdir()
         (project / "docker-compose.yml").write_text("services: {}\n")
         mock_docker_client.networks.get.side_effect = docker.errors.NotFound("nope")
 
-        result = get_docker_networks(mock_docker_client, None, project)
+        result = get_docker_networks(mock_docker_client, None, True, project)
 
         assert result == []
+
+    def test_compose_no_compose_file_logs_and_skips(self, mock_docker_client, tmp_path):
+        result = get_docker_networks(mock_docker_client, None, True, tmp_path)
+
+        assert result == []
+        assert not mock_docker_client.networks.get.called
+
+    def test_explicit_and_compose_combined(self, mock_docker_client, tmp_path):
+        project = tmp_path / "myproj"
+        project.mkdir()
+        (project / "docker-compose.yml").write_text("services: {}\n")
+        mock_docker_client.networks.get.return_value = MagicMock()
+
+        result = get_docker_networks(mock_docker_client, ["net-a"], True, project)
+
+        assert result == ["net-a", "myproj_default"]
+
+    def test_compose_already_in_explicit_not_duplicated(
+        self, mock_docker_client, tmp_path
+    ):
+        project = tmp_path / "myproj"
+        project.mkdir()
+        (project / "docker-compose.yml").write_text("services: {}\n")
+        mock_docker_client.networks.get.return_value = MagicMock()
+
+        result = get_docker_networks(
+            mock_docker_client, ["myproj_default"], True, project
+        )
+
+        assert result == ["myproj_default"]
 
 
 class TestGetDockerNetworkSubnets:

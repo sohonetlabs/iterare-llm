@@ -226,8 +226,10 @@ class TestExecuteCommand:
         result = runner.invoke(app, ["execute", "task", "--docker-network", "my-net"])
 
         assert result.exit_code == 0
-        self.mocks["get_docker_networks"].assert_called_once()
-        # Verify the resolved networks made it into ExecutionConfig used at launch
+        # use_compose stays False unless --dc is given
+        call_args = self.mocks["get_docker_networks"].call_args.args
+        assert call_args[1] == ["my-net"]
+        assert call_args[2] is False
         exec_config = self.mocks["launch_container"].call_args.args[1]
         assert exec_config.networks == ["my-net"]
         assert exec_config.network_subnets == ["10.0.0.0/24"]
@@ -238,6 +240,37 @@ class TestExecuteCommand:
         result = runner.invoke(app, ["execute", "task", "--dn", "alias-net"])
 
         assert result.exit_code == 0
+
+    def test_with_docker_compose_flag(self):
+        self.mocks["get_docker_networks"].return_value = ["myproj_default"]
+
+        result = runner.invoke(app, ["execute", "task", "--docker-compose"])
+
+        assert result.exit_code == 0
+        call_args = self.mocks["get_docker_networks"].call_args.args
+        assert call_args[1] is None
+        assert call_args[2] is True
+
+    def test_with_docker_compose_short_alias(self):
+        self.mocks["get_docker_networks"].return_value = ["myproj_default"]
+
+        result = runner.invoke(app, ["execute", "task", "--dc"])
+
+        assert result.exit_code == 0
+        assert self.mocks["get_docker_networks"].call_args.args[2] is True
+
+    def test_with_dn_and_dc_combined(self):
+        self.mocks["get_docker_networks"].return_value = [
+            "my-net",
+            "myproj_default",
+        ]
+
+        result = runner.invoke(app, ["execute", "task", "--dn", "my-net", "--dc"])
+
+        assert result.exit_code == 0
+        call_args = self.mocks["get_docker_networks"].call_args.args
+        assert call_args[1] == ["my-net"]
+        assert call_args[2] is True
 
     def test_network_not_found(self):
         self.mocks["get_docker_networks"].side_effect = NetworkNotFoundError(

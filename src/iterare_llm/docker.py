@@ -528,56 +528,67 @@ def detect_compose_network(project_dir: Path) -> str | None:
 def get_docker_networks(
     client: docker.DockerClient,
     networks: list[str] | None,
+    use_compose: bool,
     project_dir: Path,
 ) -> list[str]:
     """
     Resolve the list of Docker networks to attach a container to.
 
-    When *networks* is supplied, every network must exist or
-    :class:`NetworkNotFoundError` is raised. When *networks* is empty or
-    None, the project directory is scanned for a ``docker-compose.yml``
-    and the default compose network is attached if it currently exists;
-    otherwise no networks are attached.
+    Explicit *networks* are validated and every name must exist or
+    :class:`NetworkNotFoundError` is raised. When *use_compose* is true,
+    the project directory is additionally scanned for a docker-compose
+    file and its default network appended if currently active.
 
     Parameters
     ----------
     client : docker.DockerClient
         Docker client
     networks : list[str] | None
-        Networks explicitly requested by the user
+        Explicit networks requested by the user via ``--docker-network``
+    use_compose : bool
+        Whether to detect and attach the docker-compose default network
     project_dir : Path
         Project root used to detect docker-compose default networks
 
     Returns
     -------
     list[str]
-        Validated network names, deduplicated and sorted alphabetically
+        Validated network names, deduplicated. Explicit names appear in
+        sorted order; the compose-detected network (if any) is appended
+        last.
 
     Raises
     ------
     NetworkNotFoundError
         If a user-specified network does not exist
     """
+    resolved: list[str] = []
+
     if networks:
-        unique: set[str] = set(networks)
-        for name in unique:
+        for name in sorted(set(networks)):
             if not network_exists(client, name):
                 raise NetworkNotFoundError(f"Docker network '{name}' does not exist.")
-        logger.info(f"Resolved Docker networks: {unique}")
-        return sorted(unique)
+            resolved.append(name)
 
-    if (compose_network := detect_compose_network(project_dir)) is None:
-        return []
+    if use_compose:
+        compose_network = detect_compose_network(project_dir)
+        if compose_network is None:
+            logger.info(
+                "No docker-compose file detected in project directory; "
+                "skipping compose network attachment."
+            )
+        elif not network_exists(client, compose_network):
+            logger.info(
+                f"Detected compose network '{compose_network}' is not currently active; "
+                "skipping compose network attachment."
+            )
+        elif compose_network not in resolved:
+            resolved.append(compose_network)
 
-    if not network_exists(client, compose_network):
-        logger.info(
-            f"Detected compose network '{compose_network}' is not currently active; "
-            "skipping network attachment."
-        )
-        return []
+    if resolved:
+        logger.info(f"Resolved Docker networks: {resolved}")
 
-    logger.info(f"Using detected compose network: {compose_network}")
-    return [compose_network]
+    return resolved
 
 
 def get_docker_network_subnets(
