@@ -9,11 +9,15 @@ from unittest.mock import MagicMock, call, ANY
 from pathlib import Path
 from unittest.mock import patch
 
+from iterare_llm.config import Mount, expand_path
 from iterare_llm.docker import (
     NETWORK_SUBNETS_ENV_VAR,
     attach_additional_networks,
     build_container_config,
+    build_docker_run_command,
     build_volume_mounts,
+    resolve_container_mounts,
+    ResolvedMount,
     get_docker_network_subnets,
     container_running,
     detect_compose_network,
@@ -34,6 +38,7 @@ from iterare_llm.docker import (
     read_dotenv_compose_project_name,
 )
 from iterare_llm.exceptions import (
+    ConfigError,
     ContainerAlreadyRunningError,
     DockerError,
     ImageNotFoundError,
@@ -242,6 +247,57 @@ class TestGenerateDomainsFile:
             generate_domains_file(["pypi.org"], "run-abc123")
 
 
+class TestResolveContainerMounts:
+    @pytest.fixture
+    def base_kwargs(self, tmp_path):
+        return {
+            "worktree_path": tmp_path / "worktree",
+            "credentials_file": tmp_path / "creds" / ".credentials.json",
+            "config_file": tmp_path / "creds" / ".claude.json",
+            "domains_file": tmp_path / "domains.txt",
+            "log_file": tmp_path / "run.log",
+            "container_user": "node",
+        }
+
+    def test_extra_mounts_precede_essential_mounts(self, base_kwargs):
+        result = resolve_container_mounts(
+            **base_kwargs,
+            extra_mounts=[Mount(source="/data", target="/cache", mode="ro")],
+        )
+
+        assert result[0] == ResolvedMount(str(expand_path("/data")), "/cache", "ro")
+        assert [m.target for m in result[1:]] == [
+            "/workspace",
+            "/home/node/.claude/.credentials.json",
+            "/home/node/.claude.json",
+            "/etc/iterare-domains.txt",
+            "/var/log/iterare.log",
+        ]
+
+    def test_credentials_read_only_by_default(self, base_kwargs):
+        result = resolve_container_mounts(**base_kwargs, extra_mounts=None)
+
+        creds = next(m for m in result if m.target.endswith(".credentials.json"))
+        assert creds.mode == "ro"
+
+    def test_credentials_writable_when_requested(self, base_kwargs):
+        result = resolve_container_mounts(
+            **base_kwargs, extra_mounts=None, credentials_writable=True
+        )
+
+        creds = next(m for m in result if m.target.endswith(".credentials.json"))
+        assert creds.mode == "rw"
+
+    def test_reserved_target_rejected(self, base_kwargs):
+        with pytest.raises(
+            ConfigError, match="reserved for an essential iterare mount"
+        ):
+            resolve_container_mounts(
+                **base_kwargs,
+                extra_mounts=[Mount(source="/host/evil", target="/workspace")],
+            )
+
+
 class TestBuildVolumeMounts:
     @pytest.fixture(autouse=True)
     def setup_files(self, tmp_path):
@@ -259,7 +315,7 @@ class TestBuildVolumeMounts:
             str(cfg.worktree_path): {"bind": "/workspace", "mode": "rw"},
             str(cfg.claude_credentials_path / ".credentials.json"): {
                 "bind": "/root/.claude/.credentials.json",
-                "mode": "rw",
+                "mode": "ro",
             },
             str(cfg.claude_config_file): {"bind": "/root/.claude.json", "mode": "rw"},
             str(self.domains_file): {"bind": "/etc/iterare-domains.txt", "mode": "ro"},
@@ -275,7 +331,7 @@ class TestBuildVolumeMounts:
             str(cfg.worktree_path): {"bind": "/workspace", "mode": "rw"},
             str(cfg.claude_credentials_path / ".credentials.json"): {
                 "bind": "/home/node/.claude/.credentials.json",
-                "mode": "rw",
+                "mode": "ro",
             },
             str(cfg.claude_config_file): {
                 "bind": "/home/node/.claude.json",
@@ -283,6 +339,62 @@ class TestBuildVolumeMounts:
             },
             str(self.domains_file): {"bind": "/etc/iterare-domains.txt", "mode": "ro"},
             str(self.log_file): {"bind": "/var/log/iterare.log", "mode": "rw"},
+        }
+
+    def test_extra_mounts_are_included(self, sample_execution_config):
+        cfg = sample_execution_config
+        cfg.extra_mounts = [
+            Mount(source="/host/data", target="/workspace/data", mode="ro")
+        ]
+
+        result = build_volume_mounts(cfg, "node", self.domains_file, self.log_file)
+
+        assert result["/host/data"] == {"bind": "/workspace/data", "mode": "ro"}
+
+    def test_extra_mount_source_is_expanded(self, sample_execution_config, tmp_path):
+        cfg = sample_execution_config
+        with patch.dict("os.environ", {"DATA_DIR": str(tmp_path)}):
+            cfg.extra_mounts = [
+                Mount(source="$DATA_DIR/data", target="/workspace/data")
+            ]
+
+            result = build_volume_mounts(cfg, "node", self.domains_file, self.log_file)
+
+        assert str(tmp_path / "data") in result
+
+    def test_essential_mounts_win_on_conflict(self, sample_execution_config):
+        # An extra mount whose source collides with the worktree source must
+        # not override the essential /workspace bind.
+        cfg = sample_execution_config
+        cfg.extra_mounts = [
+            Mount(source=str(cfg.worktree_path), target="/somewhere-else", mode="ro")
+        ]
+
+        result = build_volume_mounts(cfg, "node", self.domains_file, self.log_file)
+
+        assert result[str(cfg.worktree_path)] == {"bind": "/workspace", "mode": "rw"}
+
+    def test_extra_mount_shadowing_reserved_target_is_rejected(
+        self, sample_execution_config
+    ):
+        cfg = sample_execution_config
+        cfg.extra_mounts = [Mount(source="/host/evil", target="/workspace", mode="rw")]
+
+        with pytest.raises(
+            ConfigError, match="reserved for an essential iterare mount"
+        ):
+            build_volume_mounts(cfg, "node", self.domains_file, self.log_file)
+
+    def test_credentials_writable_mounts_rw(self, sample_execution_config):
+        cfg = sample_execution_config
+
+        result = build_volume_mounts(
+            cfg, "node", self.domains_file, self.log_file, credentials_writable=True
+        )
+
+        assert result[str(cfg.claude_credentials_path / ".credentials.json")] == {
+            "bind": "/home/node/.claude/.credentials.json",
+            "mode": "rw",
         }
 
 
@@ -617,6 +729,14 @@ class TestReadDotenvComposeProjectName:
 
         assert read_dotenv_compose_project_name(tmp_path) is None
 
+    def test_unreadable_env_file_returns_none(self, tmp_path):
+        # The file exists (is_file() is True) but reading it fails; the function
+        # should swallow the OSError and degrade gracefully to None.
+        (tmp_path / ".env").write_text("COMPOSE_PROJECT_NAME=alpha\n")
+
+        with patch.object(Path, "read_text", side_effect=OSError("permission denied")):
+            assert read_dotenv_compose_project_name(tmp_path) is None
+
 
 class TestDetectComposeNetwork:
     @pytest.fixture(autouse=True)
@@ -895,3 +1015,269 @@ class TestAttachAdditionalNetworks:
             attach_additional_networks(
                 mock_docker_client, MagicMock(), ["primary", "extra"]
             )
+
+
+class TestBuildDockerRunCommand:
+    @pytest.fixture(autouse=True)
+    def setup_paths(self, tmp_path):
+        self.worktree = tmp_path / "worktree"
+        self.worktree.mkdir()
+        self.creds = tmp_path / "creds"
+        self.creds.mkdir()
+        self.config_file = self.creds / ".claude.json"
+        self.config_file.write_text("{}")
+        self.domains_file = tmp_path / "domains.txt"
+        self.domains_file.touch()
+        self.log_file = tmp_path / "run.log"
+        self.log_file.touch()
+
+    def test_root_user(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "root",
+        )
+
+        assert result == [
+            "docker",
+            "run",
+            "-it",
+            "--rm",
+            "--name",
+            "it-run",
+            "--cap-add",
+            "NET_ADMIN",
+            "-w",
+            "/workspace",
+            "-e",
+            "ITERARE_MODE=interactive",
+            "-v",
+            f"{self.worktree}:/workspace:rw",
+            "-v",
+            f"{self.creds / '.credentials.json'}:/root/.claude/.credentials.json:rw",
+            "-v",
+            f"{self.config_file}:/root/.claude.json:rw",
+            "-v",
+            f"{self.domains_file}:/etc/iterare-domains.txt:ro",
+            "-v",
+            f"{self.log_file}:/var/log/iterare.log:rw",
+            "iterare-llm:latest",
+        ]
+
+    def test_non_root_user(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+        )
+
+        assert result == [
+            "docker",
+            "run",
+            "-it",
+            "--rm",
+            "--name",
+            "it-run",
+            "--cap-add",
+            "NET_ADMIN",
+            "-w",
+            "/workspace",
+            "-e",
+            "ITERARE_MODE=interactive",
+            "-v",
+            f"{self.worktree}:/workspace:rw",
+            "-v",
+            f"{self.creds / '.credentials.json'}:/home/node/.claude/.credentials.json:rw",
+            "-v",
+            f"{self.config_file}:/home/node/.claude.json:rw",
+            "-v",
+            f"{self.domains_file}:/etc/iterare-domains.txt:ro",
+            "-v",
+            f"{self.log_file}:/var/log/iterare.log:rw",
+            "iterare-llm:latest",
+        ]
+
+    def test_with_environment_variables(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+            environment={"MY_VAR": "val"},
+        )
+
+        assert result == [
+            "docker",
+            "run",
+            "-it",
+            "--rm",
+            "--name",
+            "it-run",
+            "--cap-add",
+            "NET_ADMIN",
+            "-w",
+            "/workspace",
+            "-e",
+            "ITERARE_MODE=interactive",
+            "-e",
+            "MY_VAR=val",
+            "-v",
+            f"{self.worktree}:/workspace:rw",
+            "-v",
+            f"{self.creds / '.credentials.json'}:/home/node/.claude/.credentials.json:rw",
+            "-v",
+            f"{self.config_file}:/home/node/.claude.json:rw",
+            "-v",
+            f"{self.domains_file}:/etc/iterare-domains.txt:ro",
+            "-v",
+            f"{self.log_file}:/var/log/iterare.log:rw",
+            "iterare-llm:latest",
+        ]
+
+    def test_with_networks_and_subnets(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+            networks=["net-a", "net-b"],
+            network_subnets=["10.0.0.0/24", "172.18.0.0/16"],
+        )
+
+        assert "--network" in result
+        assert result.count("--network") == 2
+        # Network flags must precede the image argument and follow env flags
+        idx_first_network = result.index("--network")
+        assert result[idx_first_network + 1] == "net-a"
+        assert result[idx_first_network + 3] == "net-b"
+        assert "ITERARE_NETWORK_SUBNETS=10.0.0.0/24,172.18.0.0/16" in result
+
+    def test_no_networks_no_flags(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+            networks=[],
+            network_subnets=[],
+        )
+
+        assert "--network" not in result
+        assert not any("ITERARE_NETWORK_SUBNETS" in arg for arg in result)
+
+    def test_with_extra_mounts(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+            extra_mounts=[
+                Mount(source="/data", target="/workspace/data", mode="rw"),
+                Mount(source="/srv/cache", target="/cache", mode="ro"),
+            ],
+        )
+
+        # Sources are passed through expand_path (which resolves symlinks), so
+        # derive the expected host path the same way rather than hardcoding it.
+        assert "-v" in result
+        assert f"{expand_path('/data')}:/workspace/data:rw" in result
+        assert f"{expand_path('/srv/cache')}:/cache:ro" in result
+
+    def test_extra_mounts_expand_source(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+            extra_mounts=[
+                Mount(source="~/.gitconfig", target="/home/node/.gitconfig", mode="ro")
+            ],
+        )
+
+        # The leading ~ must be expanded to an absolute host path; the raw "~"
+        # must never reach the docker command.
+        gitconfig_flags = [
+            arg for arg in result if arg.endswith("/home/node/.gitconfig:ro")
+        ]
+        assert len(gitconfig_flags) == 1
+        assert not gitconfig_flags[0].startswith("~")
+
+    def test_extra_mounts_precede_essential_mounts(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+            extra_mounts=[Mount(source="/data", target="/workspace/data", mode="rw")],
+        )
+
+        idx_extra = result.index(f"{expand_path('/data')}:/workspace/data:rw")
+        idx_workspace = result.index(f"{self.worktree}:/workspace:rw")
+        assert idx_extra < idx_workspace
+
+    def test_extra_mount_shadowing_reserved_target_is_rejected(self):
+        with pytest.raises(
+            ConfigError, match="reserved for an essential iterare mount"
+        ):
+            build_docker_run_command(
+                "iterare-llm:latest",
+                "it-run",
+                self.worktree,
+                self.creds,
+                self.config_file,
+                self.domains_file,
+                self.log_file,
+                "node",
+                extra_mounts=[
+                    Mount(source="/host/evil", target="/workspace", mode="rw")
+                ],
+            )
+
+    def test_no_extra_mounts_no_extra_flags(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+        )
+
+        # Only the five essential mounts should be present.
+        assert result.count("-v") == 5

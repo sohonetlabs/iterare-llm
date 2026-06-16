@@ -4,6 +4,7 @@ from pathlib import Path
 
 import typer
 
+from iterare_llm.config import create_global_config, get_global_config_path
 from iterare_llm.logging import get_logger
 from iterare_llm.paths import get_app_config_dir, get_logs_dir, get_tmp_dir
 
@@ -66,6 +67,10 @@ def install() -> None:
     - Logs directory: Will be used for application logs (future feature)
     - Tmp directory: Used for temporary files like firewall domains
 
+    Also creates the global config file at ~/.iterare/config.toml (if missing),
+    which holds machine-wide defaults inherited by every project. An existing
+    global config is never overwritten.
+
     The config directory should contain:
     - .credentials.json: Claude API credentials
     - .claude.json: Claude session configuration
@@ -77,12 +82,18 @@ def install() -> None:
         logger.info("Starting installation")
 
         config_dir, logs_dir, tmp_dir = create_app_directories()
+        global_config_created = create_global_config()
+        global_path = get_global_config_path()
 
         typer.echo("Installation complete!")
         typer.echo("\nCreated directories:")
         typer.echo(f"  Config: {config_dir}")
         typer.echo(f"  Logs:   {logs_dir}")
         typer.echo(f"  Tmp:    {tmp_dir}")
+        if global_config_created:
+            typer.echo(f"\nCreated global config: {global_path} (global defaults)")
+        else:
+            typer.echo(f"\nGlobal config already exists at {global_path} (unchanged)")
         typer.echo(
             f"\nNext steps:\n"
             f"  1. Copy your Claude credentials to {config_dir}/\n"

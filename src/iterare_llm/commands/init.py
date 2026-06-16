@@ -8,8 +8,8 @@ import typer
 
 from iterare_llm.config import (
     DEFAULT_DOCKER_IMAGE,
-    DEFAULT_SHELL,
-    DEFAULT_CREDENTIALS_PATH,
+    create_global_config,
+    get_global_config_path,
 )
 from iterare_llm.logging import get_logger
 
@@ -22,24 +22,27 @@ DOCKERFILE_TEMPLATE = dedent(f"""
     # Modify from the base Dockerfile for your needs
     """).lstrip()
 
-CONFIG_TEMPLATE = dedent(f"""
-    [docker]
-    image = "{DEFAULT_DOCKER_IMAGE}"
-
-    [session]
-    shell = "{DEFAULT_SHELL}"
-
-    [claude]
-    credentials_path = "{DEFAULT_CREDENTIALS_PATH}"
-
-    [firewall]
-    # Additional domains to allow through the firewall
-    # Default domains (npm, anthropic, github, etc.) are always included
-    allowed_domains = [
-        # Add custom domains here, e.g.:
-        # "pypi.org",
-        # "files.pythonhosted.org",
-    ]
+PROJECT_CONFIG_TEMPLATE = dedent("""
+    # iterare project configuration
+    #
+    # This file inherits all settings from the global config at:
+    #   ~/.iterare/config.toml
+    #
+    # Add project-specific overrides below. A key set here fully overrides the
+    # global value for that key: scalar values (image, shell, credentials_path)
+    # replace the global scalar, and list values (firewall allowed_domains,
+    # mount volumes) replace the global list entirely.
+    #
+    # Example overrides:
+    #
+    # [docker]
+    # image = "my-project/custom-image:latest"
+    #
+    # [firewall]
+    # allowed_domains = ["pypi.org", "files.pythonhosted.org"]
+    #
+    # [mounts]
+    # volumes = ["./data:/workspace/data:rw"]
     """).lstrip()
 
 EXAMPLE_PROMPT_TEMPLATE = dedent("""
@@ -71,12 +74,13 @@ EXAMPLE_PROMPT_TEMPLATE = dedent("""
     """).lstrip()
 
 
-def init_project(project_dir: Path, force: bool = False) -> None:
+def init_project(project_dir: Path, force: bool = False) -> bool:
     """
     Initialize a project for iterare.
 
     Creates the .iterare directory with configuration files,
     the prompts subdirectory, and the workspaces directory for git worktrees.
+    Also creates the global config at ~/.iterare/config.toml if it is missing.
 
     Parameters
     ----------
@@ -84,6 +88,11 @@ def init_project(project_dir: Path, force: bool = False) -> None:
         The project directory to initialize
     force : bool, optional
         If True, overwrite existing files. Default is False.
+
+    Returns
+    -------
+    bool
+        True if the global config file was created, False if it already existed
 
     Raises
     ------
@@ -124,21 +133,25 @@ def init_project(project_dir: Path, force: bool = False) -> None:
         logger.debug(f"Writing file: {dockerfile_path}")
         dockerfile_path.write_text(DOCKERFILE_TEMPLATE)
 
-        # Create config.toml
+        # Create project config.toml (minimal; inherits from the global config)
         config_path = iterare_dir / "config.toml"
         logger.debug(f"Writing file: {config_path}")
-        config_path.write_text(CONFIG_TEMPLATE)
+        config_path.write_text(PROJECT_CONFIG_TEMPLATE)
 
         # Create example prompt in prompts subdirectory
         example_prompt_path = prompts_dir / "example-prompt.md"
         logger.debug(f"Writing file: {example_prompt_path}")
         example_prompt_path.write_text(EXAMPLE_PROMPT_TEMPLATE)
 
+        # Create the global config (only if it does not already exist)
+        global_config_created = create_global_config()
+
         # Update .gitignore
         logger.debug("Updating .gitignore")
         _update_gitignore(project_dir)
 
         logger.info(f"Successfully initialized iterare in {project_dir}")
+        return global_config_created
 
     except PermissionError as e:
         logger.error(f"Permission denied while initializing: {e}")
@@ -197,17 +210,18 @@ def init(
 
     Creates the .iterare directory with:
     - Dockerfile (based on iterare-llm:latest)
-    - config.toml (default configuration)
+    - config.toml (minimal; inherits from the global config)
     - prompts/ subdirectory for storing prompt files
     - prompts/example-prompt.md (example prompt template)
 
-    Also creates the workspaces/ directory for git worktrees and updates
-    .gitignore to exclude it.
+    Also creates the global config at ~/.iterare/config.toml (if missing), the
+    workspaces/ directory for git worktrees, and updates .gitignore to exclude it.
     """
     project_dir = path if path else Path.cwd()
 
     try:
-        init_project(project_dir, force=force)
+        global_config_created = init_project(project_dir, force=force)
+        global_path = get_global_config_path()
         typer.echo(f"Initialized iterare in {project_dir}")
         typer.echo("\nCreated:")
         typer.echo("  .iterare/Dockerfile")
@@ -215,13 +229,18 @@ def init(
         typer.echo("  .iterare/prompts/")
         typer.echo("  .iterare/prompts/example-prompt.md")
         typer.echo("  workspaces/")
+        if global_config_created:
+            typer.echo(f"  {global_path} (global defaults)")
+        else:
+            typer.echo(f"\nGlobal config already exists at {global_path} (unchanged)")
         typer.echo("\nUpdated .gitignore to exclude workspaces/")
         typer.echo(
             "\nNext steps:\n"
             "  1. Review and customize .iterare/Dockerfile if needed\n"
-            "  2. Review .iterare/config.toml\n"
-            "  3. See .iterare/prompts/example-prompt.md for prompt format\n"
-            "  4. Create your own prompts in .iterare/prompts/\n"
+            f"  2. Review global defaults in {global_path}\n"
+            "  3. Add any project-specific overrides in .iterare/config.toml\n"
+            "  4. See .iterare/prompts/example-prompt.md for prompt format\n"
+            "  5. Create your own prompts in .iterare/prompts/\n"
         )
     except FileExistsError as e:
         typer.echo(f"Error: {e}", err=True)

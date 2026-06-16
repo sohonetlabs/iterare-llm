@@ -6,6 +6,7 @@ import pytest
 from typer.testing import CliRunner
 
 from iterare_llm.commands.init import _update_gitignore, init_project
+from iterare_llm.config import create_global_config
 from iterare_llm.main import app
 
 runner = CliRunner()
@@ -46,6 +47,58 @@ class TestInitProject:
     def test_os_error(self, _, tmp_path):
         with pytest.raises(OSError, match="Failed to initialize project"):
             init_project(tmp_path, force=True)
+
+    def test_project_config_is_minimal(self, tmp_path):
+        init_project(tmp_path)
+
+        content = (tmp_path / ".iterare" / "config.toml").read_text()
+        # The project file only documents inheritance; it carries no active
+        # (uncommented) settings.
+        assert "inherits all settings from the global config" in content
+        active_lines = [
+            line
+            for line in content.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        assert active_lines == []
+
+
+class TestGlobalConfig:
+    def test_init_creates_global_when_missing(self, tmp_path, isolate_global_config):
+        created = init_project(tmp_path)
+
+        assert created is True
+        assert isolate_global_config.is_file()
+        content = isolate_global_config.read_text()
+        assert "[mounts]" in content
+        assert "SOURCE:TARGET" in content
+
+    def test_init_does_not_overwrite_existing_global(
+        self, tmp_path, isolate_global_config
+    ):
+        isolate_global_config.parent.mkdir(parents=True, exist_ok=True)
+        isolate_global_config.write_text("# user edits\n")
+
+        created = init_project(tmp_path)
+
+        assert created is False
+        assert isolate_global_config.read_text() == "# user edits\n"
+
+    def test_force_does_not_overwrite_existing_global(
+        self, tmp_path, isolate_global_config
+    ):
+        (tmp_path / ".iterare").mkdir()
+        isolate_global_config.parent.mkdir(parents=True, exist_ok=True)
+        isolate_global_config.write_text("# user edits\n")
+
+        created = init_project(tmp_path, force=True)
+
+        assert created is False
+        assert isolate_global_config.read_text() == "# user edits\n"
+
+    def test_create_global_config_is_idempotent(self, isolate_global_config):
+        assert create_global_config() is True
+        assert create_global_config() is False
 
 
 class TestUpdateGitignore:
@@ -93,6 +146,15 @@ class TestInitCommand:
         result = runner.invoke(app, ["init", "--force", str(tmp_path)])
 
         assert result.exit_code == 0
+
+    @patch("iterare_llm.commands.init.init_project", return_value=False)
+    def test_reports_existing_global_config(self, _, tmp_path):
+        # init_project returns False when the global config already existed; the
+        # command should report it as unchanged rather than newly created.
+        result = runner.invoke(app, ["init", str(tmp_path)])
+
+        assert result.exit_code == 0
+        assert "Global config already exists" in result.output
 
     @patch(
         "iterare_llm.commands.init.init_project", side_effect=PermissionError("nope")

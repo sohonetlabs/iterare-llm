@@ -13,10 +13,32 @@ from iterare_llm.config import (
     DEFAULT_SHELL,
     DockerConfig,
     FirewallConfig,
+    MountsConfig,
     SessionConfig,
 )
 from iterare_llm.docker import ExecutionConfig
 from iterare_llm.prompt import Prompt, PromptMetadata
+
+
+@pytest.fixture(autouse=True)
+def isolate_global_config(tmp_path, monkeypatch):
+    """
+    Point the global config at a (by default missing) tmp path.
+
+    This keeps every test isolated from the developer's real
+    ~/.iterare/config.toml — both when loading config and when `init` or
+    `install` creates the global file. Tests that exercise the global layer
+    can write to the returned path. The command modules are patched
+    individually because each imports the helper by name.
+    """
+    global_path = tmp_path / "global_iterare" / "config.toml"
+    for target in (
+        "iterare_llm.config.get_global_config_path",
+        "iterare_llm.commands.init.get_global_config_path",
+        "iterare_llm.commands.install.get_global_config_path",
+    ):
+        monkeypatch.setattr(target, lambda: global_path)
+    return global_path
 
 
 @pytest.fixture
@@ -70,6 +92,7 @@ def sample_config(credentials_dir):
         session=SessionConfig(shell=DEFAULT_SHELL),
         claude=ClaudeConfig(credentials_path=str(credentials_dir)),
         firewall=FirewallConfig(allowed_domains=["pypi.org"]),
+        mounts=MountsConfig(volumes=[]),
     )
 
 

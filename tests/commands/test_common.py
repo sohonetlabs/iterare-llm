@@ -24,6 +24,7 @@ from iterare_llm.config import (
     SessionConfig,
     ClaudeConfig,
     FirewallConfig,
+    MountsConfig,
 )
 from iterare_llm.exceptions import ContainerAlreadyRunningError, ImageNotFoundError
 
@@ -151,6 +152,7 @@ class TestValidateLaunchRequirements:
             session=SessionConfig(shell="/bin/bash"),
             claude=ClaudeConfig(credentials_path="/creds"),
             firewall=FirewallConfig(allowed_domains=[]),
+            mounts=MountsConfig(volumes=[]),
         )
 
     def test_passes(self, config, mock_docker_client):

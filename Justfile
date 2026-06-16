@@ -25,7 +25,7 @@ build-multiarch version=default_version latest="true":
 
 # Build multi-arch and push to registry tagged with version (and `latest` unless latest=false)
 push version=default_version latest="true":
-    docker buildx build --platform {{platforms}} \
+    docker buildx build --no-cache --platform {{platforms}} \
         --tag {{registry}}:{{version}} \
         {{ if latest == "true" { "--tag " + registry + ":latest" } else { "" } }} \
         --push .

@@ -18,7 +18,7 @@ from iterare_llm.config import (
     validate_credentials,
 )
 from iterare_llm.docker import (
-    NETWORK_SUBNETS_ENV_VAR,
+    build_docker_run_command,
     get_docker_network_subnets,
     docker_network_autocomplete,
     get_docker_client,
@@ -45,112 +45,6 @@ from iterare_llm.paths import get_log_file_path
 from iterare_llm.run import generate_run_name, register_run
 
 logger = get_logger(__name__)
-
-
-def build_docker_run_command(
-    image_name: str,
-    container_name: str,
-    worktree_path: Path,
-    credentials_path: Path,
-    config_file: Path,
-    domains_file: Path,
-    log_file: Path,
-    container_user: str,
-    environment: dict[str, str] | None = None,
-    networks: list[str] | None = None,
-    network_subnets: list[str] | None = None,
-) -> list[str]:
-    """
-    Build docker run command for interactive session.
-
-    Parameters
-    ----------
-    image_name : str
-        Docker image name
-    container_name : str
-        Name for the container
-    worktree_path : Path
-        Path to the worktree on host
-    credentials_path : Path
-        Path to credentials directory on host
-    config_file : Path
-        Path to claude config file on host
-    domains_file : Path
-        Path to domains file on host
-    log_file : Path
-        Path to log file on host
-    container_user : str
-        User the container runs as
-    environment : dict[str, str] | None
-        Environment variables to pass to the container
-    networks : list[str] | None
-        Docker networks to attach the container to (one ``--network`` flag per
-        entry). When empty or ``None`` no network flags are emitted.
-    network_subnets : list[str] | None
-        Subnet CIDRs of the attached networks. Forwarded to the container via
-        ``ITERARE_NETWORK_SUBNETS`` so the firewall can whitelist
-        peer-container traffic.
-
-    Returns
-    -------
-    list[str]
-        Docker run command as list of arguments
-    """
-    if container_user == "root":
-        home_dir = "/root"
-    else:
-        home_dir = f"/home/{container_user}"
-
-    credentials_file = credentials_path / ".credentials.json"
-    credentials_mount = f"{home_dir}/.claude/.credentials.json"
-    config_mount = f"{home_dir}/.claude.json"
-
-    cmd = [
-        "docker",
-        "run",
-        "-it",
-        "--rm",
-        "--name",
-        container_name,
-        "--cap-add",
-        "NET_ADMIN",
-        "-w",
-        "/workspace",
-        "-e",
-        "ITERARE_MODE=interactive",
-    ]
-
-    if environment:
-        for key, value in environment.items():
-            cmd.extend(["-e", f"{key}={value}"])
-            logger.debug(f"Added environment variable: {key}")
-
-    if network_subnets:
-        cmd.extend(["-e", f"{NETWORK_SUBNETS_ENV_VAR}={','.join(network_subnets)}"])
-        logger.debug(f"Passing {len(network_subnets)} network subnets to container")
-
-    if networks:
-        for net in networks:
-            cmd.extend(["--network", net])
-            logger.debug(f"Attaching container to network: {net}")
-
-    cmd.extend(
-        [
-            "-v",
-            f"{worktree_path}:/workspace:rw",
-            "-v",
-            f"{credentials_file}:{credentials_mount}:rw",
-            "-v",
-            f"{config_file}:{config_mount}:rw",
-            "-v",
-            f"{domains_file}:/etc/iterare-domains.txt:ro",
-            "-v",
-            f"{log_file}:/var/log/iterare.log:rw",
-            image_name,
-        ]
-    )
-
-    return cmd
 
 
 def interactive(
@@ -344,6 +238,7 @@ def interactive(
             environment=environment_vars,
             networks=docker_networks,
             network_subnets=network_subnets,
+            extra_mounts=config.mounts.volumes,
         )
 
         # 11. Register run (if created new worktree)

@@ -56,3 +56,9 @@ include = [
 [tool.hatch.version]
 path = "VERSION"
 pattern = "(?P<version>.+)"
+
+[tool.pytest.ini_options]
+# Scope collection to the real test suite. `iterare` creates full project
+# checkouts under workspaces/ (gitignored git worktrees);
+testpaths = ["tests"]
+norecursedirs = ["workspaces", "workspace", ".venv", ".git"]

@@ -13,9 +13,14 @@ from iterare_llm.config import (
     DEFAULT_SHELL,
     ClaudeConfig,
     DockerConfig,
+    Mount,
+    MountsConfig,
     build_config_from_dict,
     expand_path,
     get_default_credentials_path,
+    get_global_config_path,
+    merge_config_dicts,
+    parse_mount_spec,
     parse_toml_config,
     Config,
     FirewallConfig,
@@ -23,11 +28,13 @@ from iterare_llm.config import (
     credentials_exist,
     get_claude_credentials_path,
     load_config,
+    load_toml_if_exists,
     validate_claude_config,
     validate_credentials,
     validate_config,
     validate_docker_config,
     validate_firewall_config,
+    validate_mounts_config,
 )
 from iterare_llm.exceptions import ConfigError, CredentialsNotFoundError
 
@@ -42,6 +49,12 @@ def test_get_default_credentials_path(mock_user_config_dir):
     result = get_default_credentials_path()
 
     assert result == "/home/user/.config/iterare"
+
+
+def test_get_global_config_path():
+    result = get_global_config_path()
+
+    assert result == Path.home() / ".iterare" / "config.toml"
 
 
 class TestExpandPath:
@@ -112,6 +125,11 @@ class TestBuildConfigFromDict:
         assert result.session.shell == DEFAULT_SHELL
         assert result.claude.credentials_path == DEFAULT_CREDENTIALS_PATH
         assert result.firewall.allowed_domains == []
+        assert result.mounts.volumes == []
+
+    def test_volumes_not_a_list_rejected(self):
+        with pytest.raises(ConfigError, match="Mounts volumes must be a list"):
+            build_config_from_dict({"mounts": {"volumes": "nope"}})
 
 
 class TestValidateDockerConfig:
@@ -190,6 +208,7 @@ class TestValidateConfig:
             session=SessionConfig(shell="/bin/bash"),
             claude=ClaudeConfig(credentials_path="/some/path"),
             firewall=FirewallConfig(allowed_domains=["pypi.org"]),
+            mounts=MountsConfig(volumes=[]),
         )
 
         errors = validate_config(config)
@@ -202,6 +221,7 @@ class TestValidateConfig:
             session=SessionConfig(shell="/bin/bash"),
             claude=ClaudeConfig(credentials_path=""),
             firewall=FirewallConfig(allowed_domains=["  "]),
+            mounts=MountsConfig(volumes=[]),
         )
 
         errors = validate_config(config)
@@ -250,10 +270,156 @@ class TestValidateCredentials:
             session=SessionConfig(shell="/bin/bash"),
             claude=ClaudeConfig(credentials_path=str(tmp_path / "nonexistent")),
             firewall=FirewallConfig(allowed_domains=[]),
+            mounts=MountsConfig(volumes=[]),
         )
 
         with pytest.raises(CredentialsNotFoundError):
             validate_credentials(config)
+
+
+class TestParseMountSpec:
+    def test_source_target_mode(self):
+        result = parse_mount_spec("~/.gitconfig:/home/node/.gitconfig:ro")
+
+        assert result == Mount(
+            source="~/.gitconfig", target="/home/node/.gitconfig", mode="ro"
+        )
+
+    def test_source_target_defaults_to_rw(self):
+        result = parse_mount_spec("/data:/workspace/data")
+
+        assert result == Mount(source="/data", target="/workspace/data", mode="rw")
+
+    def test_explicit_rw_mode(self):
+        result = parse_mount_spec("/data:/workspace/data:rw")
+
+        assert result.mode == "rw"
+
+    def test_unknown_trailing_segment_is_not_a_mode(self):
+        # A third segment that is not a recognised mode is treated as the
+        # target, leaving the default mode in place.
+        result = parse_mount_spec("/a:/b:/c")
+
+        assert result == Mount(source="/a:/b", target="/c", mode="rw")
+
+    def test_missing_target_raises(self):
+        with pytest.raises(ConfigError, match="Invalid mount specification"):
+            parse_mount_spec("/only-source")
+
+    def test_empty_source_raises(self):
+        with pytest.raises(ConfigError, match="empty source"):
+            parse_mount_spec(":/target")
+
+    def test_empty_target_raises(self):
+        # "/source:" splits to a non-empty source and an empty target.
+        with pytest.raises(ConfigError, match="empty target"):
+            parse_mount_spec("/source:")
+
+    def test_non_string_raises(self):
+        with pytest.raises(ConfigError, match="must be a string"):
+            parse_mount_spec(123)
+
+
+class TestMergeConfigDicts:
+    def test_override_replaces_scalar(self):
+        result = merge_config_dicts(
+            {"docker": {"image": "global"}}, {"docker": {"image": "project"}}
+        )
+
+        assert result == {"docker": {"image": "project"}}
+
+    def test_override_replaces_list_wholesale(self):
+        result = merge_config_dicts(
+            {"firewall": {"allowed_domains": ["a", "b"]}},
+            {"firewall": {"allowed_domains": ["c"]}},
+        )
+
+        assert result == {"firewall": {"allowed_domains": ["c"]}}
+
+    def test_falls_through_when_override_absent(self):
+        result = merge_config_dicts(
+            {"docker": {"image": "global"}, "session": {"shell": "/bin/zsh"}},
+            {"docker": {"image": "project"}},
+        )
+
+        assert result == {
+            "docker": {"image": "project"},
+            "session": {"shell": "/bin/zsh"},
+        }
+
+    def test_merges_keys_within_a_section(self):
+        result = merge_config_dicts(
+            {"docker": {"image": "global"}},
+            {"docker": {"unrelated": "x"}},
+        )
+
+        assert result == {"docker": {"image": "global", "unrelated": "x"}}
+
+    def test_non_table_section_follows_override_wins(self):
+        # A top-level value that is not a table (unexpected, but defensible)
+        # cannot be merged key-by-key, so override wins; when override lacks it,
+        # the base value falls through.
+        assert merge_config_dicts({"weird": "base"}, {"weird": "proj"}) == {
+            "weird": "proj"
+        }
+        assert merge_config_dicts({"weird": "base"}, {}) == {"weird": "base"}
+
+
+class TestBuildMountsFromDict:
+    def test_parses_volumes(self):
+        data = {"mounts": {"volumes": ["~/.aws:/home/node/.aws:ro"]}}
+
+        result = build_config_from_dict(data)
+
+        assert result.mounts.volumes == [
+            Mount(source="~/.aws", target="/home/node/.aws", mode="ro")
+        ]
+
+
+class TestValidateMountsConfig:
+    def test_valid_mounts(self):
+        config = MountsConfig(volumes=[Mount(source="~/x", target="/x", mode="ro")])
+
+        assert validate_mounts_config(config) == []
+
+    def test_relative_target_rejected(self):
+        config = MountsConfig(volumes=[Mount(source="~/x", target="x", mode="ro")])
+
+        errors = validate_mounts_config(config)
+
+        assert any("absolute path" in e for e in errors)
+
+    def test_bad_mode_rejected(self):
+        config = MountsConfig(volumes=[Mount(source="~/x", target="/x", mode="z")])
+
+        errors = validate_mounts_config(config)
+
+        assert any("Mount mode must be one of" in e for e in errors)
+
+    def test_empty_source_rejected(self):
+        config = MountsConfig(volumes=[Mount(source="  ", target="/x", mode="ro")])
+
+        errors = validate_mounts_config(config)
+
+        assert any("Mount source cannot be empty" in e for e in errors)
+
+    def test_empty_target_rejected(self):
+        config = MountsConfig(volumes=[Mount(source="~/x", target="  ", mode="ro")])
+
+        errors = validate_mounts_config(config)
+
+        assert any("Mount target cannot be empty" in e for e in errors)
+
+
+class TestLoadTomlIfExists:
+    def test_missing_returns_empty(self, tmp_path):
+        assert load_toml_if_exists(tmp_path / "nope.toml") == {}
+
+    def test_existing_parsed(self, tmp_path):
+        path = tmp_path / "c.toml"
+        path.write_text('[docker]\nimage = "x"\n')
+
+        assert load_toml_if_exists(path) == {"docker": {"image": "x"}}
 
 
 class TestLoadConfig:
@@ -263,9 +429,48 @@ class TestLoadConfig:
         assert result.docker.image == "iterare-llm:latest"
         assert result.firewall.allowed_domains == ["pypi.org"]
 
-    def test_missing_config_file(self, tmp_path):
-        with pytest.raises(FileNotFoundError):
-            load_config(tmp_path)
+    def test_no_config_files_uses_defaults(self, tmp_path, isolate_global_config):
+        # Neither global nor project config exists -> built-in defaults.
+        result = load_config(tmp_path)
+
+        assert result.docker.image == DEFAULT_DOCKER_IMAGE
+        assert result.firewall.allowed_domains == []
+        assert result.mounts.volumes == []
+
+    def test_global_only_provides_defaults(self, tmp_path, isolate_global_config):
+        isolate_global_config.parent.mkdir(parents=True, exist_ok=True)
+        isolate_global_config.write_text(
+            '[docker]\nimage = "global-image"\n'
+            "[mounts]\n"
+            'volumes = ["~/.gitconfig:/home/node/.gitconfig:ro"]\n'
+        )
+
+        result = load_config(tmp_path)
+
+        assert result.docker.image == "global-image"
+        assert result.mounts.volumes == [
+            Mount(source="~/.gitconfig", target="/home/node/.gitconfig", mode="ro")
+        ]
+
+    def test_project_overrides_global(self, project_dir, isolate_global_config):
+        isolate_global_config.parent.mkdir(parents=True, exist_ok=True)
+        isolate_global_config.write_text(
+            '[docker]\nimage = "global-image"\n'
+            "[firewall]\n"
+            'allowed_domains = ["global.example"]\n'
+            "[mounts]\n"
+            'volumes = ["~/.gitconfig:/home/node/.gitconfig:ro"]\n'
+        )
+
+        result = load_config(project_dir)
+
+        # Project sets image + firewall, so those replace the global values...
+        assert result.docker.image == "iterare-llm:latest"
+        assert result.firewall.allowed_domains == ["pypi.org"]
+        # ...but mounts (absent in the project config) fall through to global.
+        assert result.mounts.volumes == [
+            Mount(source="~/.gitconfig", target="/home/node/.gitconfig", mode="ro")
+        ]
 
     def test_invalid_values_raises_config_error(self, tmp_path):
         iterare_dir = tmp_path / ".iterare"

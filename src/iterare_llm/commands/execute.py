@@ -275,6 +275,7 @@ def execute(
             environment=environment_vars,
             networks=docker_networks,
             network_subnets=docker_subnets,
+            extra_mounts=config.mounts.volumes,
         )
 
         # 12. Launch Docker container
