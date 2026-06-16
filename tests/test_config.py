@@ -127,6 +127,10 @@ class TestBuildConfigFromDict:
         assert result.firewall.allowed_domains == []
         assert result.mounts.volumes == []
 
+    def test_volumes_not_a_list_rejected(self):
+        with pytest.raises(ConfigError, match="Mounts volumes must be a list"):
+            build_config_from_dict({"mounts": {"volumes": "nope"}})
+
 
 class TestValidateDockerConfig:
     def test_valid_image(self):
@@ -405,13 +409,6 @@ class TestValidateMountsConfig:
         errors = validate_mounts_config(config)
 
         assert any("Mount target cannot be empty" in e for e in errors)
-
-    def test_volumes_not_a_list_rejected(self):
-        config = MountsConfig(volumes="nope")
-
-        errors = validate_mounts_config(config)
-
-        assert errors == ["Mounts volumes must be a list"]
 
 
 class TestLoadTomlIfExists:

@@ -16,6 +16,8 @@ from iterare_llm.docker import (
     build_container_config,
     build_docker_run_command,
     build_volume_mounts,
+    resolve_container_mounts,
+    ResolvedMount,
     get_docker_network_subnets,
     container_running,
     detect_compose_network,
@@ -36,6 +38,7 @@ from iterare_llm.docker import (
     read_dotenv_compose_project_name,
 )
 from iterare_llm.exceptions import (
+    ConfigError,
     ContainerAlreadyRunningError,
     DockerError,
     ImageNotFoundError,
@@ -244,6 +247,57 @@ class TestGenerateDomainsFile:
             generate_domains_file(["pypi.org"], "run-abc123")
 
 
+class TestResolveContainerMounts:
+    @pytest.fixture
+    def base_kwargs(self, tmp_path):
+        return {
+            "worktree_path": tmp_path / "worktree",
+            "credentials_file": tmp_path / "creds" / ".credentials.json",
+            "config_file": tmp_path / "creds" / ".claude.json",
+            "domains_file": tmp_path / "domains.txt",
+            "log_file": tmp_path / "run.log",
+            "container_user": "node",
+        }
+
+    def test_extra_mounts_precede_essential_mounts(self, base_kwargs):
+        result = resolve_container_mounts(
+            **base_kwargs,
+            extra_mounts=[Mount(source="/data", target="/cache", mode="ro")],
+        )
+
+        assert result[0] == ResolvedMount(str(expand_path("/data")), "/cache", "ro")
+        assert [m.target for m in result[1:]] == [
+            "/workspace",
+            "/home/node/.claude/.credentials.json",
+            "/home/node/.claude.json",
+            "/etc/iterare-domains.txt",
+            "/var/log/iterare.log",
+        ]
+
+    def test_credentials_read_only_by_default(self, base_kwargs):
+        result = resolve_container_mounts(**base_kwargs, extra_mounts=None)
+
+        creds = next(m for m in result if m.target.endswith(".credentials.json"))
+        assert creds.mode == "ro"
+
+    def test_credentials_writable_when_requested(self, base_kwargs):
+        result = resolve_container_mounts(
+            **base_kwargs, extra_mounts=None, credentials_writable=True
+        )
+
+        creds = next(m for m in result if m.target.endswith(".credentials.json"))
+        assert creds.mode == "rw"
+
+    def test_reserved_target_rejected(self, base_kwargs):
+        with pytest.raises(
+            ConfigError, match="reserved for an essential iterare mount"
+        ):
+            resolve_container_mounts(
+                **base_kwargs,
+                extra_mounts=[Mount(source="/host/evil", target="/workspace")],
+            )
+
+
 class TestBuildVolumeMounts:
     @pytest.fixture(autouse=True)
     def setup_files(self, tmp_path):
@@ -261,7 +315,7 @@ class TestBuildVolumeMounts:
             str(cfg.worktree_path): {"bind": "/workspace", "mode": "rw"},
             str(cfg.claude_credentials_path / ".credentials.json"): {
                 "bind": "/root/.claude/.credentials.json",
-                "mode": "rw",
+                "mode": "ro",
             },
             str(cfg.claude_config_file): {"bind": "/root/.claude.json", "mode": "rw"},
             str(self.domains_file): {"bind": "/etc/iterare-domains.txt", "mode": "ro"},
@@ -277,7 +331,7 @@ class TestBuildVolumeMounts:
             str(cfg.worktree_path): {"bind": "/workspace", "mode": "rw"},
             str(cfg.claude_credentials_path / ".credentials.json"): {
                 "bind": "/home/node/.claude/.credentials.json",
-                "mode": "rw",
+                "mode": "ro",
             },
             str(cfg.claude_config_file): {
                 "bind": "/home/node/.claude.json",
@@ -319,6 +373,29 @@ class TestBuildVolumeMounts:
         result = build_volume_mounts(cfg, "node", self.domains_file, self.log_file)
 
         assert result[str(cfg.worktree_path)] == {"bind": "/workspace", "mode": "rw"}
+
+    def test_extra_mount_shadowing_reserved_target_is_rejected(
+        self, sample_execution_config
+    ):
+        cfg = sample_execution_config
+        cfg.extra_mounts = [Mount(source="/host/evil", target="/workspace", mode="rw")]
+
+        with pytest.raises(
+            ConfigError, match="reserved for an essential iterare mount"
+        ):
+            build_volume_mounts(cfg, "node", self.domains_file, self.log_file)
+
+    def test_credentials_writable_mounts_rw(self, sample_execution_config):
+        cfg = sample_execution_config
+
+        result = build_volume_mounts(
+            cfg, "node", self.domains_file, self.log_file, credentials_writable=True
+        )
+
+        assert result[str(cfg.claude_credentials_path / ".credentials.json")] == {
+            "bind": "/home/node/.claude/.credentials.json",
+            "mode": "rw",
+        }
 
 
 class TestBuildContainerConfig:
@@ -1165,15 +1242,30 @@ class TestBuildDockerRunCommand:
             self.domains_file,
             self.log_file,
             "node",
-            extra_mounts=[Mount(source="/data", target="/workspace", mode="rw")],
+            extra_mounts=[Mount(source="/data", target="/workspace/data", mode="rw")],
         )
 
-        # Essential /workspace mount must come AFTER the extra mount so that, on
-        # a container-target collision, docker's last-wins rule keeps the
-        # worktree mounted (the extra mount can never shadow it).
-        idx_extra = result.index(f"{expand_path('/data')}:/workspace:rw")
+        idx_extra = result.index(f"{expand_path('/data')}:/workspace/data:rw")
         idx_workspace = result.index(f"{self.worktree}:/workspace:rw")
         assert idx_extra < idx_workspace
+
+    def test_extra_mount_shadowing_reserved_target_is_rejected(self):
+        with pytest.raises(
+            ConfigError, match="reserved for an essential iterare mount"
+        ):
+            build_docker_run_command(
+                "iterare-llm:latest",
+                "it-run",
+                self.worktree,
+                self.creds,
+                self.config_file,
+                self.domains_file,
+                self.log_file,
+                "node",
+                extra_mounts=[
+                    Mount(source="/host/evil", target="/workspace", mode="rw")
+                ],
+            )
 
     def test_no_extra_mounts_no_extra_flags(self):
         result = build_docker_run_command(

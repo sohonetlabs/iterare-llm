@@ -418,6 +418,8 @@ def build_config_from_dict(data: dict) -> Config:
 
     mounts_section = data.get("mounts", dict())
     mount_specs = mounts_section.get("volumes", [])
+    if not isinstance(mount_specs, list):
+        raise ConfigError(f"Mounts volumes must be a list, got: {type(mount_specs)}")
     mounts_config = MountsConfig(
         volumes=[parse_mount_spec(spec) for spec in mount_specs]
     )
@@ -513,10 +515,6 @@ def validate_mounts_config(mounts: MountsConfig) -> list[str]:
         List of validation error messages (empty if valid)
     """
     errors = []
-    if not isinstance(mounts.volumes, list):
-        errors.append("Mounts volumes must be a list")
-        return errors
-
     for mount in mounts.volumes:
         if not mount.source.strip():
             errors.append("Mount source cannot be empty")

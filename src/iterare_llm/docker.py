@@ -12,6 +12,7 @@ import yaml
 
 from iterare_llm.config import Mount, expand_path
 from iterare_llm.exceptions import (
+    ConfigError,
     ContainerAlreadyRunningError,
     DockerError,
     ImageNotFoundError,
@@ -686,14 +687,128 @@ def attach_additional_networks(
             ) from e
 
 
+@dataclass(frozen=True)
+class ResolvedMount:
+    """
+    A bind mount ready to be baked into a Docker SDK config or CLI command.
+
+    Unlike :class:`~iterare_llm.config.Mount`, the source is already expanded to
+    an absolute host path, so consumers only format it for their backend.
+
+    Attributes
+    ----------
+    source : str
+        Absolute host path (already passed through `expand_path`).
+    target : str
+        Absolute path inside the container.
+    mode : str
+        Access mode, one of `ro` or `rw`.
+    """
+
+    source: str
+    target: str
+    mode: str
+
+
+def container_home_dir(container_user: str) -> str:
+    """Return the home directory for the container user. ``root`` maps to ``/root``."""
+    if container_user == "root":
+        return "/root"
+    return f"/home/{container_user}"
+
+
+def resolve_container_mounts(
+    *,
+    worktree_path: Path,
+    credentials_file: Path,
+    config_file: Path,
+    domains_file: Path,
+    log_file: Path,
+    container_user: str,
+    extra_mounts: list[Mount] | None,
+    credentials_writable: bool = False,
+) -> list[ResolvedMount]:
+    """
+    Resolve essential and user-defined mounts into a single ordered list.
+
+    This is the shared resolution and validation step for both Docker backends
+    (SDK config and `docker run` CLI). It expands user mount sources and rejects
+    any whose target collides with a reserved iterare target, so the essential
+    mounts can never be shadowed regardless of how the backend handles
+    duplicates. User mounts precede the essential mounts in the returned list.
+
+    Parameters
+    ----------
+    worktree_path : Path
+        Path to the worktree on host (mounted at /workspace).
+    credentials_file : Path
+        Host path to `.credentials.json`.
+    config_file : Path
+        Host path to `.claude.json`.
+    domains_file : Path
+        Host path to the generated firewall domains file.
+    log_file : Path
+        Host path to the log file.
+    container_user : str
+        User the container runs as (determines the home directory).
+    extra_mounts : list[Mount] | None
+        User-defined bind mounts from `[mounts] volumes` in config.
+    credentials_writable : bool, default False
+        Mount `.credentials.json` read-write when True; otherwise read-only.
+        Only enable for flows that must persist a refreshed token.
+
+    Returns
+    -------
+    list[ResolvedMount]
+        User mounts first, then the essential iterare mounts.
+
+    Raises
+    ------
+    ConfigError
+        If an extra mount targets a path reserved for an essential mount.
+    """
+    home_dir = container_home_dir(container_user)
+    credentials_target = f"{home_dir}/.claude/.credentials.json"
+    config_target = f"{home_dir}/.claude.json"
+
+    essential = [
+        ResolvedMount(str(worktree_path), "/workspace", "rw"),
+        ResolvedMount(
+            str(credentials_file),
+            credentials_target,
+            "rw" if credentials_writable else "ro",
+        ),
+        ResolvedMount(str(config_file), config_target, "rw"),
+        ResolvedMount(str(domains_file), "/etc/iterare-domains.txt", "ro"),
+        ResolvedMount(str(log_file), "/var/log/iterare.log", "rw"),
+    ]
+    reserved_targets = {mount.target for mount in essential}
+
+    resolved_extra = []
+    for mount in extra_mounts or []:
+        if mount.target in reserved_targets:
+            raise ConfigError(
+                f"Extra mount '{mount.source}' -> '{mount.target}' is not allowed: "
+                f"'{mount.target}' is reserved for an essential iterare mount."
+            )
+        resolved_extra.append(
+            ResolvedMount(str(expand_path(mount.source)), mount.target, mount.mode)
+        )
+    if resolved_extra:
+        logger.debug(f"Resolved {len(resolved_extra)} extra mount(s)")
+
+    return resolved_extra + essential
+
+
 def build_volume_mounts(
-    config: ExecutionConfig, container_user: str, domains_file: Path, log_file: Path
+    config: ExecutionConfig,
+    container_user: str,
+    domains_file: Path,
+    log_file: Path,
+    credentials_writable: bool = False,
 ) -> dict:
     """
-    Build volume mount configuration for Docker container.
-
-    Mounts only the essential credential files from ~/.iterare/,
-    the firewall domains configuration file, and the log file.
+    Build volume mount configuration for the Docker SDK.
 
     Parameters
     ----------
@@ -705,50 +820,31 @@ def build_volume_mounts(
         Path to the generated domains file on the host
     log_file : Path
         Path to the log file on the host
+    credentials_writable : bool, default False
+        Mount `.credentials.json` read-write when True; otherwise read-only.
+        Only enable for flows that must persist a refreshed token.
 
     Returns
     -------
     dict
         Volume mount configuration for Docker SDK
     """
-    # Determine the home directory based on the user
-    if container_user == "root":
-        home_dir = "/root"
-    else:
-        home_dir = f"/home/{container_user}"
-
-    # Mount paths in container
-    credentials_file_mount = f"{home_dir}/.claude/.credentials.json"
-    config_file_mount = f"{home_dir}/.claude.json"
-
-    # Source credential files from ~/.iterare/
-    credentials_file = config.claude_credentials_path / ".credentials.json"
-    config_file = config.claude_config_file
-
-    volumes: dict = {}
-
-    # User-defined extra mounts are added first so the essential mounts below
-    # always take precedence on conflict (a stray extra mount can never shadow
-    # /workspace, credentials, the domains file, or the log file).
-    for mount in config.extra_mounts:
-        source = str(expand_path(mount.source))
-        volumes[source] = {"bind": mount.target, "mode": mount.mode}
-    if config.extra_mounts:
-        logger.debug(f"Added {len(config.extra_mounts)} extra mount(s)")
-
-    volumes.update(
-        {
-            str(config.worktree_path): {"bind": "/workspace", "mode": "rw"},
-            # Mount credentials file as read-write
-            str(credentials_file): {"bind": credentials_file_mount, "mode": "rw"},
-            # Mount config file as read-write (Claude updates session info)
-            str(config_file): {"bind": config_file_mount, "mode": "rw"},
-            # Mount domains file as read-only, owned by root
-            str(domains_file): {"bind": "/etc/iterare-domains.txt", "mode": "ro"},
-            # Mount log file as read-write for capturing execution logs
-            str(log_file): {"bind": "/var/log/iterare.log", "mode": "rw"},
-        }
+    mounts = resolve_container_mounts(
+        worktree_path=config.worktree_path,
+        credentials_file=config.claude_credentials_path / ".credentials.json",
+        config_file=config.claude_config_file,
+        domains_file=domains_file,
+        log_file=log_file,
+        container_user=container_user,
+        extra_mounts=config.extra_mounts,
+        credentials_writable=credentials_writable,
     )
+
+    # Keyed by host source; essential mounts come last so they win a source
+    # collision (target collisions are already rejected during resolution).
+    volumes = {
+        mount.source: {"bind": mount.target, "mode": mount.mode} for mount in mounts
+    }
 
     logger.debug(f"Built volume mounts for user '{container_user}': {volumes}")
     return volumes
@@ -803,25 +899,20 @@ def build_docker_run_command(
         ``ITERARE_NETWORK_SUBNETS`` so the firewall can whitelist
         peer-container traffic.
     extra_mounts : list[Mount] | None
-        User-defined bind mounts from ``[mounts] volumes`` in config. Emitted
-        before the essential iterare mounts so the latter always win on a
-        container-target conflict (with ``docker run`` the last ``-v`` for a
-        given target takes precedence).
+        User-defined bind mounts from ``[mounts] volumes`` in config. Resolved
+        and validated by :func:`resolve_container_mounts`; an extra mount whose
+        target collides with an essential iterare mount is rejected.
 
     Returns
     -------
     list[str]
         Docker run command as list of arguments
+
+    Raises
+    ------
+    ConfigError
+        If an extra mount targets a path reserved for an essential mount.
     """
-    if container_user == "root":
-        home_dir = "/root"
-    else:
-        home_dir = f"/home/{container_user}"
-
-    credentials_file = credentials_path / ".credentials.json"
-    credentials_mount = f"{home_dir}/.claude/.credentials.json"
-    config_mount = f"{home_dir}/.claude.json"
-
     cmd = [
         "docker",
         "run",
@@ -851,30 +942,20 @@ def build_docker_run_command(
             cmd.extend(["--network", net])
             logger.debug(f"Attaching container to network: {net}")
 
-    # User-defined extra mounts are emitted first so the essential mounts below
-    # always take precedence on conflict: with `docker run`, the last `-v` for a
-    # given container target wins.
-    if extra_mounts:
-        for mount in extra_mounts:
-            source = expand_path(mount.source)
-            cmd.extend(["-v", f"{source}:{mount.target}:{mount.mode}"])
-        logger.debug(f"Added {len(extra_mounts)} extra mount(s)")
-
-    cmd.extend(
-        [
-            "-v",
-            f"{worktree_path}:/workspace:rw",
-            "-v",
-            f"{credentials_file}:{credentials_mount}:rw",
-            "-v",
-            f"{config_file}:{config_mount}:rw",
-            "-v",
-            f"{domains_file}:/etc/iterare-domains.txt:ro",
-            "-v",
-            f"{log_file}:/var/log/iterare.log:rw",
-            image_name,
-        ]
+    mounts = resolve_container_mounts(
+        worktree_path=worktree_path,
+        credentials_file=credentials_path / ".credentials.json",
+        config_file=config_file,
+        domains_file=domains_file,
+        log_file=log_file,
+        container_user=container_user,
+        extra_mounts=extra_mounts,
+        credentials_writable=True,
     )
+    for mount in mounts:
+        cmd.extend(["-v", f"{mount.source}:{mount.target}:{mount.mode}"])
+
+    cmd.append(image_name)
 
     return cmd
 

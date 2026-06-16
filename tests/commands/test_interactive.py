@@ -267,7 +267,9 @@ class TestInteractiveCommand:
         assert call_args[2] is True
 
     def test_extra_mounts_forwarded_from_config(self):
-        mounts = [Mount(source="~/.gitconfig", target="/home/node/.gitconfig", mode="ro")]
+        mounts = [
+            Mount(source="~/.gitconfig", target="/home/node/.gitconfig", mode="ro")
+        ]
         self.mocks["load_config"].return_value.mounts.volumes = mounts
 
         result = runner.invoke(app, ["interactive"])
