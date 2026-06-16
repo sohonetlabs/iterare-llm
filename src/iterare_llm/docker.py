@@ -10,6 +10,7 @@ import docker
 import docker.errors
 import yaml
 
+from iterare_llm.config import Mount, expand_path
 from iterare_llm.exceptions import (
     ContainerAlreadyRunningError,
     DockerError,
@@ -38,6 +39,7 @@ class ExecutionConfig:
     environment: dict[str, str] | None = None
     networks: list[str] = field(default_factory=list)
     network_subnets: list[str] = field(default_factory=list)
+    extra_mounts: list[Mount] = field(default_factory=list)
 
 
 def get_docker_client() -> docker.DockerClient:
@@ -723,17 +725,30 @@ def build_volume_mounts(
     credentials_file = config.claude_credentials_path / ".credentials.json"
     config_file = config.claude_config_file
 
-    volumes = {
-        str(config.worktree_path): {"bind": "/workspace", "mode": "rw"},
-        # Mount credentials file as read-write
-        str(credentials_file): {"bind": credentials_file_mount, "mode": "rw"},
-        # Mount config file as read-write (Claude updates session info)
-        str(config_file): {"bind": config_file_mount, "mode": "rw"},
-        # Mount domains file as read-only, owned by root
-        str(domains_file): {"bind": "/etc/iterare-domains.txt", "mode": "ro"},
-        # Mount log file as read-write for capturing execution logs
-        str(log_file): {"bind": "/var/log/iterare.log", "mode": "rw"},
-    }
+    volumes: dict = {}
+
+    # User-defined extra mounts are added first so the essential mounts below
+    # always take precedence on conflict (a stray extra mount can never shadow
+    # /workspace, credentials, the domains file, or the log file).
+    for mount in config.extra_mounts:
+        source = str(expand_path(mount.source))
+        volumes[source] = {"bind": mount.target, "mode": mount.mode}
+    if config.extra_mounts:
+        logger.debug(f"Added {len(config.extra_mounts)} extra mount(s)")
+
+    volumes.update(
+        {
+            str(config.worktree_path): {"bind": "/workspace", "mode": "rw"},
+            # Mount credentials file as read-write
+            str(credentials_file): {"bind": credentials_file_mount, "mode": "rw"},
+            # Mount config file as read-write (Claude updates session info)
+            str(config_file): {"bind": config_file_mount, "mode": "rw"},
+            # Mount domains file as read-only, owned by root
+            str(domains_file): {"bind": "/etc/iterare-domains.txt", "mode": "ro"},
+            # Mount log file as read-write for capturing execution logs
+            str(log_file): {"bind": "/var/log/iterare.log", "mode": "rw"},
+        }
+    )
 
     logger.debug(f"Built volume mounts for user '{container_user}': {volumes}")
     return volumes

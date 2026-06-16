@@ -1,5 +1,5 @@
 [docker]
-image = "iterare-llm:latest"
+image = "sohonet/iterare-llm:latest"
 
 [session]
 shell = "/bin/bash"

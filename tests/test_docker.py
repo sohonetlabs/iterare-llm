@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, call, ANY
 from pathlib import Path
 from unittest.mock import patch
 
+from iterare_llm.config import Mount
 from iterare_llm.docker import (
     NETWORK_SUBNETS_ENV_VAR,
     attach_additional_networks,
@@ -284,6 +285,39 @@ class TestBuildVolumeMounts:
             str(self.domains_file): {"bind": "/etc/iterare-domains.txt", "mode": "ro"},
             str(self.log_file): {"bind": "/var/log/iterare.log", "mode": "rw"},
         }
+
+    def test_extra_mounts_are_included(self, sample_execution_config):
+        cfg = sample_execution_config
+        cfg.extra_mounts = [
+            Mount(source="/host/data", target="/workspace/data", mode="ro")
+        ]
+
+        result = build_volume_mounts(cfg, "node", self.domains_file, self.log_file)
+
+        assert result["/host/data"] == {"bind": "/workspace/data", "mode": "ro"}
+
+    def test_extra_mount_source_is_expanded(self, sample_execution_config, tmp_path):
+        cfg = sample_execution_config
+        with patch.dict("os.environ", {"DATA_DIR": str(tmp_path)}):
+            cfg.extra_mounts = [
+                Mount(source="$DATA_DIR/data", target="/workspace/data")
+            ]
+
+            result = build_volume_mounts(cfg, "node", self.domains_file, self.log_file)
+
+        assert str(tmp_path / "data") in result
+
+    def test_essential_mounts_win_on_conflict(self, sample_execution_config):
+        # An extra mount whose source collides with the worktree source must
+        # not override the essential /workspace bind.
+        cfg = sample_execution_config
+        cfg.extra_mounts = [
+            Mount(source=str(cfg.worktree_path), target="/somewhere-else", mode="ro")
+        ]
+
+        result = build_volume_mounts(cfg, "node", self.domains_file, self.log_file)
+
+        assert result[str(cfg.worktree_path)] == {"bind": "/workspace", "mode": "rw"}
 
 
 class TestBuildContainerConfig:

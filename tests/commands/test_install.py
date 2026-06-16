@@ -65,6 +65,40 @@ class TestInstallCommand:
         assert result.exit_code == 0
         assert "Installation complete" in result.output
 
+    @patch("iterare_llm.commands.install.create_app_directories")
+    def test_creates_global_config_when_missing(
+        self, mock_create, tmp_path, isolate_global_config
+    ):
+        mock_create.return_value = (
+            tmp_path / "config",
+            tmp_path / "logs",
+            tmp_path / "tmp",
+        )
+
+        result = runner.invoke(app, ["install"])
+
+        assert result.exit_code == 0
+        assert isolate_global_config.is_file()
+        assert "Created global config" in result.output
+
+    @patch("iterare_llm.commands.install.create_app_directories")
+    def test_does_not_overwrite_existing_global_config(
+        self, mock_create, tmp_path, isolate_global_config
+    ):
+        mock_create.return_value = (
+            tmp_path / "config",
+            tmp_path / "logs",
+            tmp_path / "tmp",
+        )
+        isolate_global_config.parent.mkdir(parents=True, exist_ok=True)
+        isolate_global_config.write_text("# user edits\n")
+
+        result = runner.invoke(app, ["install"])
+
+        assert result.exit_code == 0
+        assert isolate_global_config.read_text() == "# user edits\n"
+        assert "already exists" in result.output
+
     @patch(
         "iterare_llm.commands.install.create_app_directories",
         side_effect=PermissionError("denied"),
