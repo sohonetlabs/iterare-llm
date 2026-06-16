@@ -147,6 +147,15 @@ class TestInitCommand:
 
         assert result.exit_code == 0
 
+    @patch("iterare_llm.commands.init.init_project", return_value=False)
+    def test_reports_existing_global_config(self, _, tmp_path):
+        # init_project returns False when the global config already existed; the
+        # command should report it as unchanged rather than newly created.
+        result = runner.invoke(app, ["init", str(tmp_path)])
+
+        assert result.exit_code == 0
+        assert "Global config already exists" in result.output
+
     @patch(
         "iterare_llm.commands.init.init_project", side_effect=PermissionError("nope")
     )

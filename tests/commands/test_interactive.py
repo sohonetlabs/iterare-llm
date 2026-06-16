@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from iterare_llm.commands.interactive import build_docker_run_command
+from iterare_llm.config import Mount
 from iterare_llm.exceptions import (
     ContainerAlreadyRunningError,
     ImageNotFoundError,
@@ -15,177 +15,6 @@ from iterare_llm.exceptions import (
 from iterare_llm.main import app
 
 runner = CliRunner()
-
-
-class TestBuildDockerRunCommand:
-    @pytest.fixture(autouse=True)
-    def setup_paths(self, tmp_path):
-        self.worktree = tmp_path / "worktree"
-        self.worktree.mkdir()
-        self.creds = tmp_path / "creds"
-        self.creds.mkdir()
-        self.config_file = self.creds / ".claude.json"
-        self.config_file.write_text("{}")
-        self.domains_file = tmp_path / "domains.txt"
-        self.domains_file.touch()
-        self.log_file = tmp_path / "run.log"
-        self.log_file.touch()
-
-    def test_root_user(self):
-        result = build_docker_run_command(
-            "iterare-llm:latest",
-            "it-run",
-            self.worktree,
-            self.creds,
-            self.config_file,
-            self.domains_file,
-            self.log_file,
-            "root",
-        )
-
-        assert result == [
-            "docker",
-            "run",
-            "-it",
-            "--rm",
-            "--name",
-            "it-run",
-            "--cap-add",
-            "NET_ADMIN",
-            "-w",
-            "/workspace",
-            "-e",
-            "ITERARE_MODE=interactive",
-            "-v",
-            f"{self.worktree}:/workspace:rw",
-            "-v",
-            f"{self.creds / '.credentials.json'}:/root/.claude/.credentials.json:rw",
-            "-v",
-            f"{self.config_file}:/root/.claude.json:rw",
-            "-v",
-            f"{self.domains_file}:/etc/iterare-domains.txt:ro",
-            "-v",
-            f"{self.log_file}:/var/log/iterare.log:rw",
-            "iterare-llm:latest",
-        ]
-
-    def test_non_root_user(self):
-        result = build_docker_run_command(
-            "iterare-llm:latest",
-            "it-run",
-            self.worktree,
-            self.creds,
-            self.config_file,
-            self.domains_file,
-            self.log_file,
-            "node",
-        )
-
-        assert result == [
-            "docker",
-            "run",
-            "-it",
-            "--rm",
-            "--name",
-            "it-run",
-            "--cap-add",
-            "NET_ADMIN",
-            "-w",
-            "/workspace",
-            "-e",
-            "ITERARE_MODE=interactive",
-            "-v",
-            f"{self.worktree}:/workspace:rw",
-            "-v",
-            f"{self.creds / '.credentials.json'}:/home/node/.claude/.credentials.json:rw",
-            "-v",
-            f"{self.config_file}:/home/node/.claude.json:rw",
-            "-v",
-            f"{self.domains_file}:/etc/iterare-domains.txt:ro",
-            "-v",
-            f"{self.log_file}:/var/log/iterare.log:rw",
-            "iterare-llm:latest",
-        ]
-
-    def test_with_environment_variables(self):
-        result = build_docker_run_command(
-            "iterare-llm:latest",
-            "it-run",
-            self.worktree,
-            self.creds,
-            self.config_file,
-            self.domains_file,
-            self.log_file,
-            "node",
-            environment={"MY_VAR": "val"},
-        )
-
-        assert result == [
-            "docker",
-            "run",
-            "-it",
-            "--rm",
-            "--name",
-            "it-run",
-            "--cap-add",
-            "NET_ADMIN",
-            "-w",
-            "/workspace",
-            "-e",
-            "ITERARE_MODE=interactive",
-            "-e",
-            "MY_VAR=val",
-            "-v",
-            f"{self.worktree}:/workspace:rw",
-            "-v",
-            f"{self.creds / '.credentials.json'}:/home/node/.claude/.credentials.json:rw",
-            "-v",
-            f"{self.config_file}:/home/node/.claude.json:rw",
-            "-v",
-            f"{self.domains_file}:/etc/iterare-domains.txt:ro",
-            "-v",
-            f"{self.log_file}:/var/log/iterare.log:rw",
-            "iterare-llm:latest",
-        ]
-
-    def test_with_networks_and_subnets(self):
-        result = build_docker_run_command(
-            "iterare-llm:latest",
-            "it-run",
-            self.worktree,
-            self.creds,
-            self.config_file,
-            self.domains_file,
-            self.log_file,
-            "node",
-            networks=["net-a", "net-b"],
-            network_subnets=["10.0.0.0/24", "172.18.0.0/16"],
-        )
-
-        assert "--network" in result
-        assert result.count("--network") == 2
-        # Network flags must precede the image argument and follow env flags
-        idx_first_network = result.index("--network")
-        assert result[idx_first_network + 1] == "net-a"
-        assert result[idx_first_network + 3] == "net-b"
-        assert "ITERARE_NETWORK_SUBNETS=10.0.0.0/24,172.18.0.0/16" in result
-
-    def test_no_networks_no_flags(self):
-        result = build_docker_run_command(
-            "iterare-llm:latest",
-            "it-run",
-            self.worktree,
-            self.creds,
-            self.config_file,
-            self.domains_file,
-            self.log_file,
-            "node",
-            networks=[],
-            network_subnets=[],
-        )
-
-        assert "--network" not in result
-        assert not any("ITERARE_NETWORK_SUBNETS" in arg for arg in result)
 
 
 class TestInteractiveCommand:
@@ -436,6 +265,16 @@ class TestInteractiveCommand:
         call_args = self.mocks["get_docker_networks"].call_args.args
         assert call_args[1] == ["my-net"]
         assert call_args[2] is True
+
+    def test_extra_mounts_forwarded_from_config(self):
+        mounts = [Mount(source="~/.gitconfig", target="/home/node/.gitconfig", mode="ro")]
+        self.mocks["load_config"].return_value.mounts.volumes = mounts
+
+        result = runner.invoke(app, ["interactive"])
+
+        assert result.exit_code == 0
+        kwargs = self.mocks["build_docker_run_command"].call_args.kwargs
+        assert kwargs["extra_mounts"] == mounts
 
     def test_network_not_found(self):
         self.mocks["get_docker_networks"].side_effect = NetworkNotFoundError(

@@ -18,6 +18,7 @@ from iterare_llm.config import (
     build_config_from_dict,
     expand_path,
     get_default_credentials_path,
+    get_global_config_path,
     merge_config_dicts,
     parse_mount_spec,
     parse_toml_config,
@@ -48,6 +49,12 @@ def test_get_default_credentials_path(mock_user_config_dir):
     result = get_default_credentials_path()
 
     assert result == "/home/user/.config/iterare"
+
+
+def test_get_global_config_path():
+    result = get_global_config_path()
+
+    assert result == Path.home() / ".iterare" / "config.toml"
 
 
 class TestExpandPath:
@@ -299,6 +306,11 @@ class TestParseMountSpec:
         with pytest.raises(ConfigError, match="empty source"):
             parse_mount_spec(":/target")
 
+    def test_empty_target_raises(self):
+        # "/source:" splits to a non-empty source and an empty target.
+        with pytest.raises(ConfigError, match="empty target"):
+            parse_mount_spec("/source:")
+
     def test_non_string_raises(self):
         with pytest.raises(ConfigError, match="must be a string"):
             parse_mount_spec(123)
@@ -339,6 +351,15 @@ class TestMergeConfigDicts:
 
         assert result == {"docker": {"image": "global", "unrelated": "x"}}
 
+    def test_non_table_section_follows_override_wins(self):
+        # A top-level value that is not a table (unexpected, but defensible)
+        # cannot be merged key-by-key, so override wins; when override lacks it,
+        # the base value falls through.
+        assert merge_config_dicts({"weird": "base"}, {"weird": "proj"}) == {
+            "weird": "proj"
+        }
+        assert merge_config_dicts({"weird": "base"}, {}) == {"weird": "base"}
+
 
 class TestBuildMountsFromDict:
     def test_parses_volumes(self):
@@ -370,6 +391,20 @@ class TestValidateMountsConfig:
         errors = validate_mounts_config(config)
 
         assert any("Mount mode must be one of" in e for e in errors)
+
+    def test_empty_source_rejected(self):
+        config = MountsConfig(volumes=[Mount(source="  ", target="/x", mode="ro")])
+
+        errors = validate_mounts_config(config)
+
+        assert any("Mount source cannot be empty" in e for e in errors)
+
+    def test_empty_target_rejected(self):
+        config = MountsConfig(volumes=[Mount(source="~/x", target="  ", mode="ro")])
+
+        errors = validate_mounts_config(config)
+
+        assert any("Mount target cannot be empty" in e for e in errors)
 
     def test_volumes_not_a_list_rejected(self):
         config = MountsConfig(volumes="nope")
