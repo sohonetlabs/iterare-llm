@@ -1,5 +1,6 @@
 """Centralized path management for iterare application directories."""
 
+import hashlib
 from pathlib import Path
 
 from platformdirs import user_cache_dir, user_config_dir, user_data_dir
@@ -7,6 +8,9 @@ from platformdirs import user_cache_dir, user_config_dir, user_data_dir
 from iterare_llm.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Length of the project-path hash used to namespace per-project cache dirs.
+PROJECT_HASH_LENGTH = 16
 
 
 def get_app_config_dir() -> Path:
@@ -114,6 +118,62 @@ def get_tmp_dir() -> Path:
     tmp_dir = cache_dir / "tmp"
     logger.debug(f"Application tmp directory: {tmp_dir}")
     return tmp_dir
+
+
+def project_hash(project_dir: Path) -> str:
+    """
+    Hash a project directory to a stable identifier for cache namespacing.
+
+    The same project always maps to the same hash, so per-project caches
+    (runs metadata, conversation store) can be keyed off it.
+
+    Parameters
+    ----------
+    project_dir : Path
+        Project directory path
+
+    Returns
+    -------
+    str
+        Truncated hex digest of the resolved project path
+
+    Examples
+    --------
+    >>> len(project_hash(Path("/project")))
+    16
+    """
+    digest = hashlib.sha256(str(project_dir.resolve()).encode()).hexdigest()
+    return digest[:PROJECT_HASH_LENGTH]
+
+
+def get_conversations_dir(project_dir: Path) -> Path:
+    """
+    Get the per-project Claude conversation store directory.
+
+    This host directory is bind-mounted into the container at the Claude Code
+    projects path so transcripts persist across container teardown and can be
+    resumed. Each project gets its own directory keyed by `project_hash`.
+
+    Parameters
+    ----------
+    project_dir : Path
+        Project directory path
+
+    Returns
+    -------
+    Path
+        Path to the conversation store for this project
+
+    Examples
+    --------
+    >>> conversations_dir = get_conversations_dir(Path("/project"))
+    >>> conversations_dir.parent.name
+    'conversations'
+    """
+    cache_dir = get_app_cache_dir()
+    conversations_dir = cache_dir / "conversations" / project_hash(project_dir)
+    logger.debug(f"Conversation store for {project_dir}: {conversations_dir}")
+    return conversations_dir
 
 
 def get_log_file_path(run_name: str) -> Path:

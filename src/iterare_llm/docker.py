@@ -24,6 +24,12 @@ from iterare_llm.paths import get_log_file_path, get_tmp_dir
 logger = get_logger(__name__)
 
 NETWORK_SUBNETS_ENV_VAR = "ITERARE_NETWORK_SUBNETS"
+RESUME_ENV_VAR = "ITERARE_RESUME"
+CONTINUE_ENV_VAR = "ITERARE_CONTINUE"
+
+# The worktree is always mounted at /workspace, so Claude Code derives this
+# fixed slug for its projects directory regardless of the host worktree path.
+CLAUDE_PROJECT_SLUG = "-workspace"
 
 
 @dataclass
@@ -41,6 +47,9 @@ class ExecutionConfig:
     networks: list[str] = field(default_factory=list)
     network_subnets: list[str] = field(default_factory=list)
     extra_mounts: list[Mount] = field(default_factory=list)
+    conversations_dir: Path | None = None
+    resume_session_id: str | None = None
+    continue_conversation: bool = False
 
 
 def get_docker_client() -> docker.DockerClient:
@@ -717,6 +726,38 @@ def container_home_dir(container_user: str) -> str:
     return f"/home/{container_user}"
 
 
+def conversations_mount_target(container_user: str) -> str:
+    """Return the in-container path Claude Code stores `/workspace` transcripts at."""
+    home_dir = container_home_dir(container_user)
+    return f"{home_dir}/.claude/projects/{CLAUDE_PROJECT_SLUG}"
+
+
+def resume_environment(
+    resume_session_id: str | None, continue_conversation: bool
+) -> dict[str, str]:
+    """
+    Build the environment variables that tell the entrypoint how to resume.
+
+    Parameters
+    ----------
+    resume_session_id : str | None
+        Session id to resume via `--resume`, if any
+    continue_conversation : bool
+        Whether to continue the most recent conversation via `--continue`
+
+    Returns
+    -------
+    dict[str, str]
+        Environment variables to inject (empty when neither is requested)
+    """
+    environment = {}
+    if resume_session_id:
+        environment[RESUME_ENV_VAR] = resume_session_id
+    if continue_conversation:
+        environment[CONTINUE_ENV_VAR] = "1"
+    return environment
+
+
 def resolve_container_mounts(
     *,
     worktree_path: Path,
@@ -727,6 +768,7 @@ def resolve_container_mounts(
     container_user: str,
     extra_mounts: list[Mount] | None,
     credentials_writable: bool = False,
+    conversations_dir: Path | None = None,
 ) -> list[ResolvedMount]:
     """
     Resolve essential and user-defined mounts into a single ordered list.
@@ -756,6 +798,9 @@ def resolve_container_mounts(
     credentials_writable : bool, default False
         Mount `.credentials.json` read-write when True; otherwise read-only.
         Only enable for flows that must persist a refreshed token.
+    conversations_dir : Path | None, default None
+        Host conversation store bind-mounted at Claude Code's projects path so
+        transcripts persist across container teardown. Skipped when None.
 
     Returns
     -------
@@ -782,6 +827,14 @@ def resolve_container_mounts(
         ResolvedMount(str(domains_file), "/etc/iterare-domains.txt", "ro"),
         ResolvedMount(str(log_file), "/var/log/iterare.log", "rw"),
     ]
+    if conversations_dir is not None:
+        essential.append(
+            ResolvedMount(
+                str(conversations_dir),
+                conversations_mount_target(container_user),
+                "rw",
+            )
+        )
     reserved_targets = {mount.target for mount in essential}
 
     resolved_extra = []
@@ -838,6 +891,7 @@ def build_volume_mounts(
         container_user=container_user,
         extra_mounts=config.extra_mounts,
         credentials_writable=credentials_writable,
+        conversations_dir=config.conversations_dir,
     )
 
     # Keyed by host source; essential mounts come last so they win a source
@@ -863,6 +917,9 @@ def build_docker_run_command(
     networks: list[str] | None = None,
     network_subnets: list[str] | None = None,
     extra_mounts: list[Mount] | None = None,
+    conversations_dir: Path | None = None,
+    resume_session_id: str | None = None,
+    continue_conversation: bool = False,
 ) -> list[str]:
     """
     Build docker run command for interactive session.
@@ -902,6 +959,13 @@ def build_docker_run_command(
         User-defined bind mounts from ``[mounts] volumes`` in config. Resolved
         and validated by :func:`resolve_container_mounts`; an extra mount whose
         target collides with an essential iterare mount is rejected.
+    conversations_dir : Path | None
+        Host conversation store bind-mounted at Claude Code's projects path so
+        transcripts persist across container teardown.
+    resume_session_id : str | None
+        Session id to resume via `claude --resume`, forwarded to the entrypoint.
+    continue_conversation : bool
+        Continue the most recent conversation via `claude --continue`.
 
     Returns
     -------
@@ -933,6 +997,12 @@ def build_docker_run_command(
             cmd.extend(["-e", f"{key}={value}"])
             logger.debug(f"Added environment variable: {key}")
 
+    for key, value in resume_environment(
+        resume_session_id, continue_conversation
+    ).items():
+        cmd.extend(["-e", f"{key}={value}"])
+        logger.debug(f"Added resume environment variable: {key}")
+
     if network_subnets:
         cmd.extend(["-e", f"{NETWORK_SUBNETS_ENV_VAR}={','.join(network_subnets)}"])
         logger.debug(f"Passing {len(network_subnets)} network subnets to container")
@@ -951,6 +1021,7 @@ def build_docker_run_command(
         container_user=container_user,
         extra_mounts=extra_mounts,
         credentials_writable=True,
+        conversations_dir=conversations_dir,
     )
     for mount in mounts:
         cmd.extend(["-v", f"{mount.source}:{mount.target}:{mount.mode}"])
@@ -1004,6 +1075,10 @@ def build_container_config(
         logger.debug(
             f"Passing {len(config.network_subnets)} network subnets to container"
         )
+
+    environment.update(
+        resume_environment(config.resume_session_id, config.continue_conversation)
+    )
 
     if environment:
         container_config["environment"] = environment

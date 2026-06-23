@@ -7,7 +7,7 @@ from pathlib import Path
 
 from iterare_llm.git import worktree_exists
 from iterare_llm.logging import get_logger
-from iterare_llm.paths import get_app_cache_dir
+from iterare_llm.paths import get_app_cache_dir, project_hash
 
 logger = get_logger(__name__)
 
@@ -81,9 +81,7 @@ def get_runs_file(project_dir: Path) -> Path:
     runs_dir = cache_dir / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create a unique filename for this project based on its path
-    project_hash = hashlib.sha256(str(project_dir.resolve()).encode()).hexdigest()[:16]
-    runs_file = runs_dir / f"runs-{project_hash}.json"
+    runs_file = runs_dir / f"runs-{project_hash(project_dir)}.json"
 
     logger.debug(f"Runs file for {project_dir}: {runs_file}")
     return runs_file

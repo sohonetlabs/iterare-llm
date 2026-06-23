@@ -82,9 +82,14 @@ RUN chmod +x /usr/local/bin/init-firewall.sh && \
 
 USER node
 
-# Install uv
+# Install uv into the node home, then symlink onto /usr/local/bin so it stays
+# resolvable in login/zsh shells that rebuild PATH and drop ~/.local/bin.
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/home/node/.local/bin:${PATH}"
+USER root
+RUN ln -sf /home/node/.local/bin/uv /usr/local/bin/uv && \
+  ln -sf /home/node/.local/bin/uvx /usr/local/bin/uvx
+USER node
 
 # Copy entrypoint script
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh

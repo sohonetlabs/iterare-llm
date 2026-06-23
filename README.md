@@ -127,6 +127,10 @@ iterare execute refactor --reuse refactor-abc12345
 
 # Pass environment variables to the container
 iterare execute refactor --env PIP_INDEX_URL --env GITHUB_TOKEN
+
+# Continue the most recent conversation, or resume a specific one
+iterare execute refactor --continue
+iterare execute refactor --resume <session-id>
 ```
 
 ### `iterare interactive`
@@ -152,6 +156,22 @@ iterare interactive --worktree --reuse my-feature-abc12345
 
 # Pass environment variables
 iterare interactive --env PIP_INDEX_URL
+
+# Continue the most recent conversation, or resume a specific one
+iterare interactive --continue
+iterare interactive --resume <session-id>
+```
+
+### `iterare conversations`
+
+List the persisted Claude conversations available to resume for the project,
+newest first. Conversations are stored per project and bind-mounted back into
+the container, so a session can be picked up later with `--continue` (most
+recent) or `--resume <session-id>` on either `execute` or `interactive`. The
+session id autocompletes from this list.
+
+```bash
+iterare conversations           # List resumable conversations
 ```
 
 ### `iterare log [RUN_NAME]`

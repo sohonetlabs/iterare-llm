@@ -9,6 +9,8 @@ set -e
 #
 # Environment variables:
 # - ITERARE_MODE: Set to "interactive" for interactive mode, otherwise runs with prompt
+# - ITERARE_RESUME: Session id to resume via `claude --resume`
+# - ITERARE_CONTINUE: When set, continue the most recent conversation via `claude --continue`
 
 echo "Starting iterare container..."
 
@@ -51,6 +53,17 @@ echo "Firewall rules initialized successfully"
 # Change to workspace directory
 cd /workspace
 
+# Resume flags are driven by the host CLI (--continue / --resume) and picked up
+# from the persisted Claude projects mount. --resume wins if both are set.
+RESUME_ARGS=()
+if [ -n "$ITERARE_RESUME" ]; then
+    RESUME_ARGS+=(--resume "$ITERARE_RESUME")
+    echo "Resuming conversation: ${ITERARE_RESUME}"
+elif [ -n "$ITERARE_CONTINUE" ]; then
+    RESUME_ARGS+=(--continue)
+    echo "Continuing most recent conversation"
+fi
+
 if [ "$MODE" = "interactive" ]; then
     # Interactive mode - launch Claude Code for interactive use
     echo "Launching Claude Code in interactive mode..."
@@ -59,7 +72,7 @@ if [ "$MODE" = "interactive" ]; then
 
     # Launch Claude Code interactively with dangerous permissions
     # --dangerously-skip-permissions: Bypass all permission checks (safe in sandboxed environment)
-    exec claude --dangerously-skip-permissions
+    exec claude --dangerously-skip-permissions "${RESUME_ARGS[@]}"
 else
     # Prompt mode - verify prompt file and run non-interactively
     if [ ! -f /workspace/.claude-prompt.md ]; then
@@ -74,7 +87,7 @@ else
     # --output-format=stream-json: Real-time streaming output
     # --dangerously-skip-permissions: Bypass all permission checks (safe in sandboxed environment)
     # Use tee to write output to both stdout and the log file
-    claude --print --verbose --output-format=stream-json --dangerously-skip-permissions "$(cat /workspace/.claude-prompt.md)" | tee /var/log/iterare.log | jq -r '
+    claude --print --verbose --output-format=stream-json --dangerously-skip-permissions "${RESUME_ARGS[@]}" "$(cat /workspace/.claude-prompt.md)" | tee /var/log/iterare.log | jq -r '
 if .type == "assistant" then
   .message.content[] |
   if .type == "text" then

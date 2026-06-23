@@ -1,7 +1,7 @@
 """Tests for execute command."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -126,6 +126,10 @@ class TestExecuteCommand:
                 return_value="containerid123",
             ),
             patch("iterare_llm.commands.execute.register_run"),
+            patch(
+                "iterare_llm.commands.execute.prepare_conversations",
+                return_value=tmp_path / "conversations",
+            ),
         ]
         self.mocks = {}
         for p in self.patches:
@@ -281,3 +285,27 @@ class TestExecuteCommand:
 
         assert result.exit_code == 1
         assert "docker network ls" in result.output
+
+    def test_continue_sets_exec_config(self):
+        result = runner.invoke(app, ["execute", "task", "--continue"])
+
+        assert result.exit_code == 0
+        exec_config = self.mocks["launch_container"].call_args.args[1]
+        assert exec_config.continue_conversation is True
+        assert exec_config.resume_session_id is None
+        assert exec_config.conversations_dir == self.project_dir / "conversations"
+
+    def test_resume_sets_exec_config(self):
+        result = runner.invoke(app, ["execute", "task", "--resume", "sess-1"])
+
+        assert result.exit_code == 0
+        exec_config = self.mocks["launch_container"].call_args.args[1]
+        assert exec_config.resume_session_id == "sess-1"
+        assert exec_config.continue_conversation is False
+
+    def test_continue_passed_to_prepare_conversations(self):
+        runner.invoke(app, ["execute", "task", "--continue"])
+
+        assert self.mocks["prepare_conversations"].call_args_list == [
+            call(self.project_dir, True, None)
+        ]
