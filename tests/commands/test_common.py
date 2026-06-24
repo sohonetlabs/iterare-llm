@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 from iterare_llm.commands.common import (
     cleanup_on_interrupt,
     get_current_run,
+    prepare_conversations,
     resolve_environment_variables,
     resolve_project_dir,
     run_id_autocomplete,
@@ -142,6 +143,54 @@ class TestCleanupOnInterrupt:
         mock_git.is_repo = False
 
         cleanup_on_interrupt(Path("/repo"), "task-1")
+
+
+class TestPrepareConversations:
+    @pytest.fixture
+    def store(self, tmp_path):
+        """Conversation store pointed at by both the command and module helpers."""
+        conversations_dir = tmp_path / "conversations"
+        with (
+            patch(
+                "iterare_llm.commands.common.get_conversations_dir",
+                return_value=conversations_dir,
+            ),
+            patch(
+                "iterare_llm.conversations.get_conversations_dir",
+                return_value=conversations_dir,
+            ),
+        ):
+            yield conversations_dir
+
+    def test_both_flags_rejected(self, store, tmp_path):
+        with pytest.raises(typer.Exit):
+            prepare_conversations(tmp_path, True, "sess-1")
+
+    def test_creates_world_writable_store(self, store, tmp_path):
+        result = prepare_conversations(tmp_path, False, None)
+
+        assert result == store
+        assert store.is_dir()
+        assert (store.stat().st_mode & 0o777) == 0o777
+
+    def test_continue_empty_store_exits(self, store, tmp_path):
+        with pytest.raises(typer.Exit):
+            prepare_conversations(tmp_path, True, None)
+
+    def test_resume_unknown_exits(self, store, tmp_path):
+        store.mkdir(parents=True)
+        (store / "known.jsonl").write_text("{}\n")
+
+        with pytest.raises(typer.Exit):
+            prepare_conversations(tmp_path, False, "missing")
+
+    def test_resume_known_returns_dir(self, store, tmp_path):
+        store.mkdir(parents=True)
+        (store / "known.jsonl").write_text("{}\n")
+
+        result = prepare_conversations(tmp_path, False, "known")
+
+        assert result == store
 
 
 class TestValidateLaunchRequirements:

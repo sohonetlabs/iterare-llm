@@ -7,11 +7,13 @@ from typing import Optional
 import typer
 
 from iterare_llm.commands.common import (
+    prepare_conversations,
     resolve_environment_variables,
     resolve_project_dir,
     run_id_autocomplete,
     validate_launch_requirements,
 )
+from iterare_llm.conversations import conversation_autocomplete
 from iterare_llm.config import (
     load_config,
     get_claude_credentials_path,
@@ -72,6 +74,18 @@ def interactive(
         "-r",
         help="Reuse existing workspace from run ID",
         autocompletion=run_id_autocomplete,
+    ),
+    continue_conversation: bool = typer.Option(
+        False,
+        "--continue",
+        "-c",
+        help="Continue the most recent Claude conversation for this project",
+    ),
+    resume_session_id: Optional[str] = typer.Option(
+        None,
+        "--resume",
+        help="Resume a specific Claude conversation by session id",
+        autocompletion=conversation_autocomplete,
     ),
     no_worktree: bool = typer.Option(
         True,
@@ -187,14 +201,20 @@ def interactive(
         # 6. Validate requirements
         validate_launch_requirements(config, docker_client, run_name)
 
-        # 7. Create git worktree (if needed)
+        # 7. Prepare conversation store and validate resume request (before any
+        # worktree is created, so a bad --resume never orphans a worktree)
+        conversations_dir = prepare_conversations(
+            repo_path, continue_conversation, resume_session_id
+        )
+
+        # 8. Create git worktree (if needed)
         if not no_worktree and not reuse:
             logger.info(f"Creating worktree for run: {run_name}")
             worktree_path = create_worktree(repo_path, run_name, base_branch)
             worktree_created = True
             logger.info(f"Worktree created at: {worktree_path}")
 
-        # 8. Prepare files for container
+        # 9. Prepare files for container
         credentials_path = get_claude_credentials_path(config)
         claude_config_file = credentials_path / ".claude.json"
 
@@ -212,19 +232,19 @@ def interactive(
         log_file.chmod(0o666)
         logger.info(f"Created log file at {log_file}")
 
-        # 9. Resolve environment variables if provided
+        # 10. Resolve environment variables if provided
         environment_vars = None
         if env and isinstance(env, list):
             logger.info(f"Resolving {len(env)} environment variables from host")
             environment_vars = resolve_environment_variables(env)
 
-        # 10. Resolve Docker networks (explicit list or compose default)
+        # 11. Resolve Docker networks (explicit list or compose default)
         docker_networks = get_docker_networks(
             docker_client, docker_network, docker_compose, repo_path
         )
         network_subnets = get_docker_network_subnets(docker_client, docker_networks)
 
-        # 11. Build docker run command
+        # 12. Build docker run command
         container_name = generate_container_name(run_name)
         docker_cmd = build_docker_run_command(
             image_name=config.docker.image,
@@ -239,13 +259,16 @@ def interactive(
             networks=docker_networks,
             network_subnets=network_subnets,
             extra_mounts=config.mounts.volumes,
+            conversations_dir=conversations_dir,
+            resume_session_id=resume_session_id,
+            continue_conversation=continue_conversation,
         )
 
-        # 11. Register run (if created new worktree)
+        # 13. Register run (if created new worktree)
         if worktree_created:
             register_run(repo_path, run_name, "interactive")
 
-        # 12. Display launch message
+        # 14. Display launch message
         typer.echo(f"\nLaunching interactive session '{run_name}'...")
         typer.echo(f"  Workspace: {worktree_path}")
         if base_branch != "N/A":
@@ -253,11 +276,11 @@ def interactive(
         typer.echo(f"  Container: {container_name}")
         typer.echo("\nStarting Claude Code... (Ctrl+C to exit)\n")
 
-        # 13. Launch interactive container
+        # 15. Launch interactive container
         logger.info(f"Running: {' '.join(docker_cmd)}")
         result = subprocess.run(docker_cmd)
 
-        # 14. Report exit status
+        # 16. Report exit status
         if result.returncode == 0:
             typer.echo("\n\nInteractive session ended successfully.")
         else:

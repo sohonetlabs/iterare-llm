@@ -1,6 +1,7 @@
 import typer
 from typing import Annotated
 
+from iterare_llm.commands.conversations import conversations_command
 from iterare_llm.commands.credentials import credentials as credentials_command
 from iterare_llm.commands.init import init
 from iterare_llm.commands.execute import execute as execute_command
@@ -41,6 +42,9 @@ app.command(
 app.command(name="log", help="View logs for a run")(log)
 app.command(name="cleanup", help="Clean up git worktree and branch for a run")(cleanup)
 app.command(name="list", help="List execution runs for the project")(list_command)
+app.command(
+    name="conversations", help="List persisted Claude conversations for the project"
+)(conversations_command)
 app.command(name="merge", help="Merge worktree branch back into current branch")(merge)
 
 

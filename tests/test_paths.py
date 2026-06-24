@@ -7,9 +7,11 @@ from iterare_llm.paths import (
     get_app_cache_dir,
     get_app_config_dir,
     get_app_data_dir,
+    get_conversations_dir,
     get_log_file_path,
     get_logs_dir,
     get_tmp_dir,
+    project_hash,
 )
 
 
@@ -53,3 +55,25 @@ class TestLogFilePath:
         result = get_log_file_path("refactor-api-abc123")
 
         assert result == Path("/mock/data/iterare/logs/refactor-api-abc123.log")
+
+
+class TestProjectHash:
+    def test_length(self, tmp_path):
+        assert len(project_hash(tmp_path)) == 16
+
+    def test_stable_for_same_path(self, tmp_path):
+        assert project_hash(tmp_path) == project_hash(tmp_path)
+
+    def test_differs_by_path(self, tmp_path):
+        other = tmp_path / "other"
+        other.mkdir()
+        assert project_hash(tmp_path) != project_hash(other)
+
+
+class TestConversationsDir:
+    @patch("iterare_llm.paths.user_cache_dir", return_value="/mock/cache/iterare")
+    def test_under_conversations_with_project_hash(self, _, tmp_path):
+        result = get_conversations_dir(tmp_path)
+
+        assert result.parent == Path("/mock/cache/iterare/conversations")
+        assert result.name == project_hash(tmp_path)

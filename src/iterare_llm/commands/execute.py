@@ -7,11 +7,13 @@ import typer
 
 from iterare_llm.commands.common import (
     cleanup_on_interrupt,
+    prepare_conversations,
     resolve_environment_variables,
     resolve_project_dir,
     run_id_autocomplete,
     validate_launch_requirements,
 )
+from iterare_llm.conversations import conversation_autocomplete
 from iterare_llm.config import (
     load_config,
     get_claude_credentials_path,
@@ -129,6 +131,18 @@ def execute(
         help="Reuse existing workspace from run ID",
         autocompletion=run_id_autocomplete,
     ),
+    continue_conversation: bool = typer.Option(
+        False,
+        "--continue",
+        "-c",
+        help="Continue the most recent Claude conversation for this project",
+    ),
+    resume_session_id: Optional[str] = typer.Option(
+        None,
+        "--resume",
+        help="Resume a specific Claude conversation by session id",
+        autocompletion=conversation_autocomplete,
+    ),
     env: Optional[list[str]] = typer.Option(
         None,
         "--env",
@@ -238,30 +252,36 @@ def execute(
         # 7. Validate execution requirements
         validate_launch_requirements(config, docker_client, run_name)
 
-        # 8. Create git worktree (only if not reusing)
+        # 8. Prepare conversation store and validate resume request (before any
+        # worktree is created, so a bad --resume never orphans a worktree)
+        conversations_dir = prepare_conversations(
+            repo_path, continue_conversation, resume_session_id
+        )
+
+        # 9. Create git worktree (only if not reusing)
         if not reuse:
             logger.info(f"Creating worktree for run: {run_name}")
             worktree_path = create_worktree(repo_path, run_name, branch)
             worktree_created = True
             logger.info(f"Worktree created at: {worktree_path}")
 
-        # 9. Prepare workspace (write config and prompt files)
+        # 10. Prepare workspace (write config and prompt files)
         logger.info("Preparing workspace with Claude Code configuration")
         prepare_workspace(worktree_path, prompt_obj.content)
 
-        # 10. Resolve environment variables if provided
+        # 11. Resolve environment variables if provided
         environment_vars = None
         if env is not None and isinstance(env, list):
             logger.info(f"Resolving {len(env)} environment variables from host")
             environment_vars = resolve_environment_variables(env)
 
-        # 11. Resolve Docker networks (explicit list and/or compose default)
+        # 12. Resolve Docker networks (explicit list and/or compose default)
         docker_networks = get_docker_networks(
             docker_client, docker_network, docker_compose, repo_path
         )
         docker_subnets = get_docker_network_subnets(docker_client, docker_networks)
 
-        # 12. Build execution config
+        # 13. Build execution config
         credentials_path = get_claude_credentials_path(config)
         claude_config_file = credentials_path / ".claude.json"
         exec_config = ExecutionConfig(
@@ -276,18 +296,21 @@ def execute(
             networks=docker_networks,
             network_subnets=docker_subnets,
             extra_mounts=config.mounts.volumes,
+            conversations_dir=conversations_dir,
+            resume_session_id=resume_session_id,
+            continue_conversation=continue_conversation,
         )
 
-        # 12. Launch Docker container
+        # 14. Launch Docker container
         logger.info(f"Launching Docker container for run: {run_name}")
         container_id = launch_container(docker_client, exec_config, run_name)
         logger.info(f"Container launched with ID: {container_id}")
 
-        # 13. Register run in cache (only if not reusing)
+        # 15. Register run in cache (only if not reusing)
         if not reuse:
             register_run(repo_path, run_name, prompt_name)
 
-        # 14. Display success message
+        # 16. Display success message
         display_success_message(run_name, container_id, worktree_path, branch)
 
     except KeyboardInterrupt:

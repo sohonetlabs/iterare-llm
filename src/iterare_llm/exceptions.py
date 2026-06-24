@@ -61,6 +61,25 @@ class NetworkNotFoundError(DockerError):
     pass
 
 
+# Conversation exceptions
+class ConversationError(IterareError):
+    """Base exception for conversation resume/continue operations."""
+
+    pass
+
+
+class ConversationNotFoundError(ConversationError):
+    """Requested conversation does not exist in the project's store."""
+
+    pass
+
+
+class NoConversationsError(ConversationError):
+    """No conversations exist for the project to continue or resume."""
+
+    pass
+
+
 # Config exceptions
 class ConfigError(IterareError):
     """Base exception for configuration issues."""

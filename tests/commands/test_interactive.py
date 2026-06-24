@@ -1,6 +1,6 @@
 """Tests for interactive command."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -107,6 +107,10 @@ class TestInteractiveCommand:
             patch(
                 "iterare_llm.commands.interactive.subprocess.run",
                 return_value=MagicMock(returncode=0),
+            ),
+            patch(
+                "iterare_llm.commands.interactive.prepare_conversations",
+                return_value=tmp_path / "conversations",
             ),
         ]
         self.mocks = {}
@@ -287,3 +291,27 @@ class TestInteractiveCommand:
 
         assert result.exit_code == 1
         assert "docker network ls" in result.output
+
+    def test_continue_forwarded(self):
+        result = runner.invoke(app, ["interactive", "--continue"])
+
+        assert result.exit_code == 0
+        kwargs = self.mocks["build_docker_run_command"].call_args.kwargs
+        assert kwargs["continue_conversation"] is True
+        assert kwargs["resume_session_id"] is None
+        assert kwargs["conversations_dir"] == self.project_dir / "conversations"
+
+    def test_resume_forwarded(self):
+        result = runner.invoke(app, ["interactive", "--resume", "sess-1"])
+
+        assert result.exit_code == 0
+        kwargs = self.mocks["build_docker_run_command"].call_args.kwargs
+        assert kwargs["resume_session_id"] == "sess-1"
+        assert kwargs["continue_conversation"] is False
+
+    def test_resume_passed_to_prepare_conversations(self):
+        runner.invoke(app, ["interactive", "--resume", "sess-1"])
+
+        assert self.mocks["prepare_conversations"].call_args_list == [
+            call(self.project_dir, False, "sess-1")
+        ]

@@ -8,6 +8,7 @@ import docker
 import typer
 
 from iterare_llm.config import Config
+from iterare_llm.conversations import resolve_continue_or_resume
 from iterare_llm.docker import (
     container_running,
     ensure_image,
@@ -15,9 +16,11 @@ from iterare_llm.docker import (
 )
 from iterare_llm.exceptions import (
     ContainerAlreadyRunningError,
+    ConversationError,
 )
 from iterare_llm.git import remove_worktree
 from iterare_llm.logging import get_logger
+from iterare_llm.paths import get_conversations_dir
 from iterare_llm.run import list_runs, list_runs_with_workspaces
 
 logger = get_logger(__name__)
@@ -180,6 +183,58 @@ def cleanup_on_interrupt(repo_path: Path, worktree_name: str) -> None:
         logger.info(f"Successfully removed worktree: {worktree_name}")
     except Exception as e:
         logger.error(f"Failed to remove worktree during cleanup: {e}")
+
+
+def prepare_conversations(
+    project_dir: Path,
+    continue_conversation: bool,
+    resume_session_id: Optional[str],
+) -> Path:
+    """
+    Prepare the persisted conversation store and validate a resume request.
+
+    Ensures the per-project store exists (and is writable by the container
+    user) before launch, enforces that `--continue` and `--resume` are not
+    combined, and verifies that any requested conversation actually exists.
+
+    Parameters
+    ----------
+    project_dir : Path
+        Project directory whose conversation store is used
+    continue_conversation : bool
+        Whether `--continue` was requested
+    resume_session_id : str | None
+        Session id requested via `--resume`, if any
+
+    Returns
+    -------
+    Path
+        Path to the conversation store, ready to bind-mount into the container
+
+    Raises
+    ------
+    typer.Exit
+        If both flags are combined or the requested conversation is unavailable
+    """
+    if continue_conversation and resume_session_id:
+        typer.echo("Error: --continue and --resume cannot be used together.", err=True)
+        raise typer.Exit(1)
+
+    conversations_dir = get_conversations_dir(project_dir)
+    conversations_dir.mkdir(parents=True, exist_ok=True)
+    # World-writable so the container user (a different uid) can write transcripts.
+    conversations_dir.chmod(0o777)
+
+    if continue_conversation or resume_session_id:
+        try:
+            resolve_continue_or_resume(
+                project_dir, continue_conversation, resume_session_id
+            )
+        except ConversationError as error:
+            typer.echo(f"Error: {error}", err=True)
+            raise typer.Exit(1)
+
+    return conversations_dir
 
 
 def validate_launch_requirements(

@@ -5,6 +5,24 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] - 2026-06-16
+
+### Added
+
+- Resumable conversations: Claude Code transcripts now persist in a per-project
+  store and are bind-mounted back into the container, so a conversation can be
+  picked up on a later run. Both `iterare execute` and `iterare interactive`
+  accept `--continue` (`-c`) to resume the most recent conversation and
+  `--resume <session-id>` to resume a specific one, with shell autocomplete over
+  the available sessions.
+- `iterare conversations`: a new command that lists the persisted conversations
+  available to resume for the current project.
+
+### Fixed
+
+- `uv` is now symlinked onto `/usr/local/bin` in the container image so it stays
+  on `PATH` in login/zsh shells that rebuild `PATH` and drop `~/.local/bin`.
+
 ## [0.2.3] - 2026-06-16
 
 ### Added
@@ -30,4 +48,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documents how to override the global defaults, rather than a full standalone
   config.
 
+[0.2.4]: https://github.com/sohonetlabs/iterare-llm/releases/tag/0.2.4
 [0.2.3]: https://github.com/sohonetlabs/iterare-llm/releases/tag/0.2.3

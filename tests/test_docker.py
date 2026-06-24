@@ -11,12 +11,16 @@ from unittest.mock import patch
 
 from iterare_llm.config import Mount, expand_path
 from iterare_llm.docker import (
+    CONTINUE_ENV_VAR,
     NETWORK_SUBNETS_ENV_VAR,
+    RESUME_ENV_VAR,
     attach_additional_networks,
     build_container_config,
     build_docker_run_command,
     build_volume_mounts,
+    conversations_mount_target,
     resolve_container_mounts,
+    resume_environment,
     ResolvedMount,
     get_docker_network_subnets,
     container_running,
@@ -297,6 +301,65 @@ class TestResolveContainerMounts:
                 extra_mounts=[Mount(source="/host/evil", target="/workspace")],
             )
 
+    def test_conversations_dir_appended_when_given(self, base_kwargs, tmp_path):
+        conversations = tmp_path / "conversations"
+
+        result = resolve_container_mounts(
+            **base_kwargs, extra_mounts=None, conversations_dir=conversations
+        )
+
+        assert result[-1] == ResolvedMount(
+            str(conversations), "/home/node/.claude/projects/-workspace", "rw"
+        )
+
+    def test_conversations_dir_omitted_when_none(self, base_kwargs):
+        result = resolve_container_mounts(**base_kwargs, extra_mounts=None)
+
+        assert all("projects/-workspace" not in m.target for m in result)
+
+    def test_conversations_target_is_reserved(self, base_kwargs, tmp_path):
+        with pytest.raises(
+            ConfigError, match="reserved for an essential iterare mount"
+        ):
+            resolve_container_mounts(
+                **base_kwargs,
+                conversations_dir=tmp_path / "conversations",
+                extra_mounts=[
+                    Mount(
+                        source="/host/evil",
+                        target="/home/node/.claude/projects/-workspace",
+                    )
+                ],
+            )
+
+
+class TestConversationsMountTarget:
+    def test_node_user(self):
+        assert (
+            conversations_mount_target("node")
+            == "/home/node/.claude/projects/-workspace"
+        )
+
+    def test_root_user(self):
+        assert conversations_mount_target("root") == "/root/.claude/projects/-workspace"
+
+
+class TestResumeEnvironment:
+    def test_empty_when_neither(self):
+        assert resume_environment(None, False) == {}
+
+    def test_resume_session(self):
+        assert resume_environment("sess-1", False) == {RESUME_ENV_VAR: "sess-1"}
+
+    def test_continue(self):
+        assert resume_environment(None, True) == {CONTINUE_ENV_VAR: "1"}
+
+    def test_resume_and_continue_both_emitted(self):
+        assert resume_environment("sess-1", True) == {
+            RESUME_ENV_VAR: "sess-1",
+            CONTINUE_ENV_VAR: "1",
+        }
+
 
 class TestBuildVolumeMounts:
     @pytest.fixture(autouse=True)
@@ -460,6 +523,37 @@ class TestBuildContainerConfig:
         )
 
         assert result["network"] == "my-net"
+
+    def test_with_resume_session(self, sample_execution_config):
+        sample_execution_config.resume_session_id = "sess-1"
+
+        result = build_container_config(
+            sample_execution_config, "node", self.domains_file, self.log_file
+        )
+
+        assert result["environment"] == {RESUME_ENV_VAR: "sess-1"}
+
+    def test_with_continue(self, sample_execution_config):
+        sample_execution_config.continue_conversation = True
+
+        result = build_container_config(
+            sample_execution_config, "node", self.domains_file, self.log_file
+        )
+
+        assert result["environment"] == {CONTINUE_ENV_VAR: "1"}
+
+    def test_conversations_dir_mounted(self, sample_execution_config, tmp_path):
+        conversations = tmp_path / "conversations"
+        sample_execution_config.conversations_dir = conversations
+
+        result = build_container_config(
+            sample_execution_config, "node", self.domains_file, self.log_file
+        )
+
+        assert result["volumes"][str(conversations)] == {
+            "bind": "/home/node/.claude/projects/-workspace",
+            "mode": "rw",
+        }
 
 
 class TestLaunchContainer:
@@ -1281,3 +1375,51 @@ class TestBuildDockerRunCommand:
 
         # Only the five essential mounts should be present.
         assert result.count("-v") == 5
+
+    def test_resume_session_emits_env(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+            resume_session_id="sess-1",
+        )
+
+        assert f"{RESUME_ENV_VAR}=sess-1" in result
+
+    def test_continue_emits_env(self):
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+            continue_conversation=True,
+        )
+
+        assert f"{CONTINUE_ENV_VAR}=1" in result
+
+    def test_conversations_dir_adds_mount(self, tmp_path):
+        conversations = tmp_path / "conversations"
+
+        result = build_docker_run_command(
+            "iterare-llm:latest",
+            "it-run",
+            self.worktree,
+            self.creds,
+            self.config_file,
+            self.domains_file,
+            self.log_file,
+            "node",
+            conversations_dir=conversations,
+        )
+
+        assert f"{conversations}:/home/node/.claude/projects/-workspace:rw" in result
+        assert result.count("-v") == 6
